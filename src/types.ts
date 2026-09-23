@@ -1,74 +1,156 @@
-export type NodeType = 'primary' | 'bottleneck_mitosis' | 'shadow_candidate';
+// Wire types shared between the engine (server/) and the HUD (src/).
 
-export interface GraphNode {
+export type NodeHealth = 'healthy' | 'degraded' | 'faulted';
+
+export type Phase =
+  | 'idle'
+  | 'synthesizing'
+  | 'candidate_ready'
+  | 'observing';
+
+export interface NodeView {
   id: string;
   name: string;
   role: string;
-  type: NodeType;
-  status: 'optimal' | 'bottleneck_mitosis' | 'evaluating_sandbox' | 'buffering';
-  x: number; // percentage coordinates 0-100
-  y: number;
-  load: number; // 0 - 100
-  latency: number; // ms
-  throughput: string;
-  memory: string;
-  fitness?: number; // e.g. 99.4
-  tag: string;
-  sandboxIsolated?: boolean;
+  depth: number;
+  health: NodeHealth;
+  version: number;
+  source: string;
+  /** Lifetime counters */
+  executions: number;
+  errors: number;
+  /** Sliding-window stats (last ~50 executions) */
+  windowErrorRate: number;
+  p50: number;
+  p95: number;
+  lastLatencyMs: number;
+  lastError?: string;
+  recordedInputs: number;
+  recordedFailures: number;
 }
 
-export interface SynapseLink {
-  id: string;
+export interface EdgeView {
   from: string;
   to: string;
-  bandwidth: string;
-  color: 'cyan' | 'amber' | 'emerald' | 'purple';
-  active: boolean;
-  isBuddingBridge?: boolean;
+  /** packets/sec observed across this edge in the last window */
+  rate: number;
+  degraded: boolean;
 }
 
-export interface VitalsData {
-  metabolicStrain: number; // 0 - 100
-  memoryEntropy: number; // 0 - 100
-  gcChurnRate: number; // MB/sec
-  executionVolatility: number; // %
-  leakProbability: number; // %
-  latencyHistogram: Array<{
-    range: string;
-    value: number;
-    isRightCluster: boolean;
-  }>;
-  painReflexActive: boolean;
-  painIntensity: number; // 0 - 100
+export interface DiffLine {
+  type: 'add' | 'remove' | 'context';
+  text: string;
+  oldLine?: number;
+  newLine?: number;
 }
 
-export interface AstDiffSnippet {
-  nodeTarget: string;
-  strategy: string;
-  previousFitness: number;
-  candidateFitness: number;
-  oldAst: string[];
-  newAst: string[];
-  changes: Array<{
-    type: 'add' | 'remove' | 'context';
-    text: string;
-    line: number;
-  }>;
+export interface LatencyStats {
+  p50: number;
+  p99: number;
+  max: number;
 }
 
-export interface ReflectionLog {
+export interface FitnessReport {
+  /** 0-100 composite */
+  score: number;
+  corpusSize: number;
+  /** fraction of corpus inputs the candidate handled without throwing */
+  passRate: number;
+  /** fraction of inputs where the candidate's output shape satisfied the incumbent contract and downstream nodes */
+  contractRate: number;
+  /** 0-1, derived from candidate p99 against a latency budget */
+  latencyScore: number;
+  incumbent: LatencyStats & { passRate: number };
+  candidate: LatencyStats;
+  /** incumbent p99 / candidate p99 */
+  speedup: number;
+  failures: Array<{ input: string; error: string }>;
+  contractViolations: Array<{ input: string; reason: string }>;
+}
+
+export interface CandidateView {
   id: string;
-  time: string;
-  level: 'THOUGHT' | 'SYNAPSE' | 'MITOSIS' | 'REFLEX' | 'HOTSWAP';
+  targetNodeId: string;
+  name: string;
+  source: string;
+  provider: string;
+  model: string;
+  attempt: number;
+  rationale?: string;
+  fitness: FitnessReport;
+  diff: DiffLine[];
+  createdAt: string;
+}
+
+export interface Vitals {
+  heapUsedMB: number;
+  heapTotalMB: number;
+  rssMB: number;
+  eventLoopLagMs: number;
+  gcChurnMBs: number;
+  packetsPerSec: number;
+  errorRate: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  histogram: Array<{ range: string; count: number }>;
+  uptimeSec: number;
+}
+
+export type LogLevel = 'INFO' | 'FAULT' | 'SENTINEL' | 'SYNTH' | 'EVAL' | 'SPLICE' | 'ROLLBACK';
+
+export interface EventLog {
+  id: string;
+  ts: string;
+  level: LogLevel;
   message: string;
   details?: string;
 }
 
-export interface QuineStatus {
-  generation: string;
-  integrityScore: number;
-  serializerReady: boolean;
-  stateChecksum: string;
-  lineageDepth: number;
-  persistedEpoch: string;
+export interface LineageEntry {
+  generation: number;
+  ts: string;
+  nodeId: string;
+  parentHash: string;
+  hash: string;
+  provider: string;
+  model: string;
+  fitnessScore: number;
+  speedup: number;
+  rolledBack: boolean;
 }
+
+export interface OrganismState {
+  generation: number;
+  stateHash: string;
+  uptimeSec: number;
+  phase: Phase;
+  targetNodeId: string | null;
+  autonomous: boolean;
+  spliceThreshold: number;
+  nodes: NodeView[];
+  edges: EdgeView[];
+  candidate: CandidateView | null;
+  /** Most recent candidate that was spliced or discarded, kept so the diff and fitness stay inspectable. */
+  lastCandidate: (CandidateView & { outcome: 'spliced' | 'discarded' }) | null;
+  vitals: Vitals;
+  logs: EventLog[];
+  lineage: LineageEntry[];
+  provider: { active: string; model: string; available: string[] };
+  canRollback: boolean;
+}
+
+export type WsClientMessage =
+  | { type: 'INJECT'; kind: 'MALFORMED' | 'SURGE' | 'NORMAL'; count?: number }
+  | { type: 'SYNTHESIZE'; nodeId?: string }
+  | { type: 'SPLICE' }
+  | { type: 'DISCARD' }
+  | { type: 'ROLLBACK' }
+  | { type: 'SET_AUTONOMOUS'; enabled: boolean }
+  | { type: 'EXPORT_SNAPSHOT' }
+  | { type: 'SEND_PACKET'; payload: unknown };
+
+export type WsServerMessage =
+  | { type: 'STATE'; state: OrganismState }
+  | { type: 'SNAPSHOT'; filename: string; code: string }
+  | { type: 'ERROR'; message: string };
