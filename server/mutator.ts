@@ -9,6 +9,12 @@ export interface PatchRequest {
   downstream: Array<{ name: string; source: string }>;
   /** Evaluator feedback from a previous attempt, if this is a retry. */
   feedback?: string;
+  /** Goal-directed synthesis: what the pipeline should emit. Only training examples appear here. */
+  goal?: {
+    name: string;
+    description: string;
+    examples: Array<{ pipelineInput: unknown; nodeInput: unknown; expected: Record<string, unknown>; actual: unknown }>;
+  };
 }
 
 export interface PatchResult {
@@ -33,6 +39,7 @@ Rules:
 - Keep the same function name and parameter.
 - Preserve the output contract: every key the current implementation returns must still be present with the same meaning. Downstream consumers are shown to you; their reads must keep working.
 - Never throw on malformed input. Degrade gracefully (empty string, null, zero) and keep returning a full object.
+- When a goal is given, make the output satisfy it for the general case described, not just the listed examples. Do not hardcode example values.
 - Remove algorithmic hot spots. Target linear or n·log(n) time in the size of the input.
 - Do not add flags, mode switches, or special cases for the sample inputs. Fix the general defect.
 - Reply with the complete function only. No markdown fences, no commentary before or after.`;
@@ -54,6 +61,10 @@ export function buildPrompt(req: PatchRequest): string {
   }
   if (req.downstream.length) {
     parts.push(`# Downstream consumers of this node's output\n` + req.downstream.map((d) => `\`\`\`js\n${d.source}\n\`\`\``).join('\n'));
+  }
+  if (req.goal) {
+    parts.push(`# Goal: ${req.goal.name}\n${req.goal.description}\n\nThe pipeline's final output is scored against the expected fields below. You are rewriting ${req.node.name}; its output flows through the downstream consumers shown above before it becomes the pipeline output. Current vs expected on training examples:\n` +
+      req.goal.examples.map((e, i) => `${i + 1}. pipeline input: ${preview(e.pipelineInput, 160)}\n   this node's input: ${preview(e.nodeInput, 240)}\n   expected fields: ${preview(e.expected, 160)}\n   currently: ${preview(e.actual, 160)}`).join('\n'));
   }
   if (req.feedback) parts.push(`# Feedback from the previous attempt\n${req.feedback}`);
   parts.push('Return the repaired function.');
@@ -121,6 +132,9 @@ export class ReferenceProvider implements Provider {
   available() { return true; }
 
   async synthesize(req: PatchRequest): Promise<PatchResult> {
+    if (req.goal) {
+      throw new Error(`Reference provider cannot synthesize toward a goal. Configure ANTHROPIC_API_KEY or GEMINI_API_KEY for goal-directed repair.`);
+    }
     if (req.node.id !== 'jit_cache') {
       throw new Error(`Reference provider only knows how to repair jit_cache. Configure ANTHROPIC_API_KEY or GEMINI_API_KEY to repair ${req.node.id}.`);
     }

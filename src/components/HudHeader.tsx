@@ -46,6 +46,7 @@ export function HudHeader({ state, connected, onInject, onSynthesize, onSplice, 
         <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${phaseTone[state.phase]}`}>
           <span className="font-bold tracking-wide">{phaseLabel[state.phase]}</span>
           {target && <span className="text-[10px] opacity-70 border-l border-current/30 pl-2">{target}</span>}
+          {state.activeGoal && <span className="text-[10px] opacity-70 border-l border-current/30 pl-2">goal {state.activeGoal}</span>}
           {state.phase === 'candidate_ready' && state.candidate && (
             <span className="text-[10px] opacity-70 border-l border-current/30 pl-2">fitness {state.candidate.fitness.score}</span>
           )}

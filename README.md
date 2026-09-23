@@ -55,13 +55,42 @@ must be present and every downstream node must accept the output), 15% latency a
 budget. A candidate that scores below the threshold gets one retry with the evaluator's findings in
 the prompt. Anything below threshold stays a candidate for manual splice.
 
+## Goals
+
+A goal is a positive objective: for these inputs, the pipeline should emit this. Drop a JSON file in
+`goals/`:
+
+```json
+{
+  "name": "region-tag",
+  "description": "Every commit record carries a `region` field: the payload text before the first ':' in upper case, or UNKNOWN when the payload is not a string.",
+  "nodeId": "async_buffer",
+  "target": 0.95,
+  "scorer": "fields",
+  "examples": [ { "input": { "id": "g0", "data": "eu-west:4471:tick" }, "expected": { "region": "EU-WEST" } }, … ]
+}
+```
+
+`expected` is partial: only the keys present are scored. Scorers are `fields` (deep equality),
+`numeric` (absolute `tolerance`), and `text` (normalised edit distance). A third of the examples are
+held out deterministically and never appear in the prompt. The sentinel treats holdout below
+`target` as a breach and synthesizes a rewrite of `nodeId` with the training misses in the prompt.
+Fitness for a goal-directed candidate is 25% pass, 15% contract, 10% latency, 50% goal holdout, so a
+candidate that hardcodes the shown examples scores high on train and low on holdout and stays below
+the splice threshold. The log calls that out. If goal examples fail upstream of the target node, the
+log says which node is blocking and that it has to be repaired first.
+
+The shipped goal is unmet on the original pipeline. The built-in reference provider declines goal
+work, so this path needs an API key.
+
 ## HUD
 
 - **Inject fault / Inject surge** send malformed or oversized packets through the live pipeline.
 - **autonomous / manual** toggles whether the sentinel synthesizes on breach and splices above threshold.
 - **Synthesize**, **Splice**, **Rollback** drive the loop by hand.
 - **Diff** is a real line diff of incumbent vs candidate. **Fitness** is the evaluator's report.
-  **Log** is the engine's event stream. **Lineage** lists every generation.
+  **Log** is the engine's event stream. **Lineage** lists every generation. **Goals** shows each
+  goal's train and holdout score, its worst misses, and a button to synthesize toward it.
 - Vitals are the process's own: heap, RSS, event loop lag, GC churn, throughput, latency quantiles.
 - **export snapshot** writes `snapshots/morphic-genNNN-<hash>.mjs`, runnable with
   `node snapshots/<file> '{"data":"hello"}'`.
@@ -70,14 +99,15 @@ the prompt. Anything below threshold stays a candidate for manual splice.
 
 ```
 GET  /api/health           POST /api/packet {…}        POST /api/inject/:kind?count=n
-GET  /api/state            POST /api/synthesize {nodeId?}
+GET  /api/state            POST /api/synthesize {nodeId?, goal?}
+GET  /api/goals
 POST /api/splice           POST /api/rollback          POST /api/snapshot
 ```
 
 ## Tests
 
 ```
-npm test        # vitest: sandbox, diff, pipeline, evaluator, sentinel, full loop
+npm test        # vitest: sandbox, diff, pipeline, evaluator, sentinel, goals, full loop
 npm run lint    # tsc --noEmit
 ```
 
@@ -88,7 +118,8 @@ server/
   sandbox.ts     compile a function in an isolated vm context with a per-call timeout
   nodes.ts       default node sources and traffic generators
   pipeline.ts    topo-ordered execution, per-node window stats and traffic ring buffers, splice/rollback
-  evaluator.ts   fitness measurement on recorded traffic
+  evaluator.ts   fitness measurement on recorded traffic, plus goal holdout when a goal is active
+  goals.ts       goal files, deterministic train/holdout split, scorers
   sentinel.ts    breach detection, post-splice observation
   mutator.ts     patch providers: anthropic, gemini, reference
   diff.ts        LCS line diff
@@ -97,5 +128,6 @@ server/
   organism.ts    the control loop
   server.ts      express + websocket
 src/             React HUD
+goals/           goal definitions
 tests/           vitest
 ```

@@ -27,7 +27,8 @@ app.post('/api/inject/:kind', (req, res) => {
   organism.inject(kind, Number(req.query.count ?? 1));
   res.json({ ok: true });
 });
-app.post('/api/synthesize', async (req, res) => { await organism.synthesize(req.body?.nodeId); res.json(organism.state().candidate); });
+app.post('/api/synthesize', async (req, res) => { await organism.synthesize(req.body?.nodeId, req.body?.goal); res.json(organism.state().candidate); });
+app.get('/api/goals', (_req, res) => res.json(organism.state().goals));
 app.post('/api/splice', (_req, res) => { organism.splice('user'); res.json({ phase: organism.state().phase }); });
 app.post('/api/rollback', (_req, res) => { organism.rollback('user'); res.json({ phase: organism.state().phase }); });
 app.post('/api/snapshot', (_req, res) => res.json(organism.snapshot()));
@@ -57,7 +58,7 @@ wss.on('connection', (ws) => {
     try {
       switch (msg.type) {
         case 'INJECT': organism.inject(msg.kind, msg.count ?? 1); break;
-        case 'SYNTHESIZE': await organism.synthesize(msg.nodeId); break;
+        case 'SYNTHESIZE': await organism.synthesize(msg.nodeId, msg.goal); break;
         case 'SPLICE': organism.splice('user'); break;
         case 'DISCARD': organism.discard(); break;
         case 'ROLLBACK': organism.rollback('user'); break;

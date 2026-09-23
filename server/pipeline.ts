@@ -188,6 +188,23 @@ export class Pipeline {
     return { output: current, latencyMs: performance.now() - t0, trace };
   }
 
+  /** Execute without recording stats, optionally substituting node implementations. Throws on failure. */
+  dryRun(input: unknown, overrides: Map<string, CompiledFn> = new Map()): { output: unknown; nodeInputs: Map<string, unknown> } {
+    let current = input;
+    const nodeInputs = new Map<string, unknown>();
+    for (const id of this.order) {
+      nodeInputs.set(id, current);
+      const fn = overrides.get(id) ?? this.nodes.get(id)!.fn;
+      try { current = fn.call(current); }
+      catch (err) {
+        const e = new Error(`${id}: ${err instanceof Error ? err.message : String(err)}`) as Error & { nodeId: string };
+        e.nodeId = id;
+        throw e;
+      }
+    }
+    return { output: current, nodeInputs };
+  }
+
   edgeRate(from: string, to: string, windowMs = 5000): number {
     const now = performance.now();
     const hits = this.edgeHits.get(`${from}->${to}`)?.values() ?? [];

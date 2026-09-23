@@ -66,6 +66,8 @@ export interface FitnessReport {
   speedup: number;
   failures: Array<{ input: string; error: string }>;
   contractViolations: Array<{ input: string; reason: string }>;
+  /** Present when the candidate was synthesized for a goal. Holdout examples are never shown to the model. */
+  goal?: { name: string; train: number; holdout: number; holdoutCount: number; target: number };
 }
 
 export interface CandidateView {
@@ -80,6 +82,19 @@ export interface CandidateView {
   fitness: FitnessReport;
   diff: DiffLine[];
   createdAt: string;
+}
+
+export interface GoalView {
+  name: string;
+  description: string;
+  nodeId: string;
+  target: number;
+  train: number;
+  holdout: number;
+  trainCount: number;
+  holdoutCount: number;
+  met: boolean;
+  worstMisses: Array<{ input: string; expected: string; actual: string; split: 'train' | 'holdout' }>;
 }
 
 export interface Vitals {
@@ -97,7 +112,7 @@ export interface Vitals {
   uptimeSec: number;
 }
 
-export type LogLevel = 'INFO' | 'FAULT' | 'SENTINEL' | 'SYNTH' | 'EVAL' | 'SPLICE' | 'ROLLBACK';
+export type LogLevel = 'INFO' | 'FAULT' | 'SENTINEL' | 'SYNTH' | 'EVAL' | 'SPLICE' | 'ROLLBACK' | 'GOAL';
 
 export interface EventLog {
   id: string;
@@ -136,13 +151,15 @@ export interface OrganismState {
   vitals: Vitals;
   logs: EventLog[];
   lineage: LineageEntry[];
+  goals: GoalView[];
+  activeGoal: string | null;
   provider: { active: string; model: string; available: string[] };
   canRollback: boolean;
 }
 
 export type WsClientMessage =
   | { type: 'INJECT'; kind: 'MALFORMED' | 'SURGE' | 'NORMAL'; count?: number }
-  | { type: 'SYNTHESIZE'; nodeId?: string }
+  | { type: 'SYNTHESIZE'; nodeId?: string; goal?: string }
   | { type: 'SPLICE' }
   | { type: 'DISCARD' }
   | { type: 'ROLLBACK' }

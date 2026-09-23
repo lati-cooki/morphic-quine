@@ -45,7 +45,7 @@ export function useMorphicEngine() {
     error,
     clearSnapshot: () => setSnapshot(null),
     inject: (kind: 'MALFORMED' | 'SURGE' | 'NORMAL', count = 1) => send({ type: 'INJECT', kind, count }),
-    synthesize: (nodeId?: string) => send({ type: 'SYNTHESIZE', nodeId }),
+    synthesize: (nodeId?: string, goal?: string) => send({ type: 'SYNTHESIZE', nodeId, goal }),
     splice: () => send({ type: 'SPLICE' }),
     discard: () => send({ type: 'DISCARD' }),
     rollback: () => send({ type: 'ROLLBACK' }),

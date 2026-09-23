@@ -1,0 +1,209 @@
+{
+  "name": "region-tag",
+  "description": "Every commit record carries a `region` field: the payload text before the first ':' in upper case, or UNKNOWN when the payload is not a string.",
+  "nodeId": "async_buffer",
+  "target": 0.95,
+  "scorer": "fields",
+  "examples": [
+    {
+      "input": {
+        "id": "g0",
+        "data": "ap-south:3471:trace"
+      },
+      "expected": {
+        "region": "AP-SOUTH"
+      }
+    },
+    {
+      "input": {
+        "id": "g1",
+        "data": "us-west:1791:sensor"
+      },
+      "expected": {
+        "region": "US-WEST"
+      }
+    },
+    {
+      "input": {
+        "id": "g2",
+        "data": "eu-north:2542:tick"
+      },
+      "expected": {
+        "region": "EU-NORTH"
+      }
+    },
+    {
+      "input": {
+        "id": "g3",
+        "data": "eu-north:1950:frame"
+      },
+      "expected": {
+        "region": "EU-NORTH"
+      }
+    },
+    {
+      "input": {
+        "id": "g4",
+        "data": "eu-west:2408:trace"
+      },
+      "expected": {
+        "region": "EU-WEST"
+      }
+    },
+    {
+      "input": {
+        "id": "g5",
+        "data": "sa-east:2144:frame"
+      },
+      "expected": {
+        "region": "SA-EAST"
+      }
+    },
+    {
+      "input": {
+        "id": "g6",
+        "data": "eu-west:7955:sensor"
+      },
+      "expected": {
+        "region": "EU-WEST"
+      }
+    },
+    {
+      "input": {
+        "id": "g7",
+        "data": "eu-north:3028:frame"
+      },
+      "expected": {
+        "region": "EU-NORTH"
+      }
+    },
+    {
+      "input": {
+        "id": "g8",
+        "data": "us-west:2013:trace"
+      },
+      "expected": {
+        "region": "US-WEST"
+      }
+    },
+    {
+      "input": {
+        "id": "g9",
+        "data": "eu-west:4622:sensor"
+      },
+      "expected": {
+        "region": "EU-WEST"
+      }
+    },
+    {
+      "input": {
+        "id": "g10",
+        "data": "eu-north:3181:tick"
+      },
+      "expected": {
+        "region": "EU-NORTH"
+      }
+    },
+    {
+      "input": {
+        "id": "g11",
+        "data": "sa-east:3363:sensor"
+      },
+      "expected": {
+        "region": "SA-EAST"
+      }
+    },
+    {
+      "input": {
+        "id": "g12",
+        "data": "eu-north:6054:frame"
+      },
+      "expected": {
+        "region": "EU-NORTH"
+      }
+    },
+    {
+      "input": {
+        "id": "g13",
+        "data": "eu-west:4078:tick"
+      },
+      "expected": {
+        "region": "EU-WEST"
+      }
+    },
+    {
+      "input": {
+        "id": "g14",
+        "data": "eu-west:9974:sensor"
+      },
+      "expected": {
+        "region": "EU-WEST"
+      }
+    },
+    {
+      "input": {
+        "id": "g15",
+        "data": "eu-north:1976:frame"
+      },
+      "expected": {
+        "region": "EU-NORTH"
+      }
+    },
+    {
+      "input": {
+        "id": "g16",
+        "data": "sa-east:9711:trace"
+      },
+      "expected": {
+        "region": "SA-EAST"
+      }
+    },
+    {
+      "input": {
+        "id": "g17",
+        "data": "ap-south:8628:trace"
+      },
+      "expected": {
+        "region": "AP-SOUTH"
+      }
+    },
+    {
+      "input": {
+        "id": "gnull",
+        "data": null
+      },
+      "expected": {
+        "region": "UNKNOWN"
+      }
+    },
+    {
+      "input": {
+        "id": "gnum",
+        "data": 42
+      },
+      "expected": {
+        "region": "UNKNOWN"
+      }
+    },
+    {
+      "input": {
+        "id": "gnocolon",
+        "data": "plainpayload"
+      },
+      "expected": {
+        "region": "PLAINPAYLOAD"
+      }
+    },
+    {
+      "input": {
+        "id": "gobj",
+        "data": {
+          "nested": true
+        }
+      },
+      "expected": {
+        "region": "UNKNOWN"
+      }
+    }
+  ]
+}

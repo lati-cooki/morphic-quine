@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Brain, GitCompare, Terminal, ListChecks, GitBranch, Zap, X, Copy } from 'lucide-react';
+import { Brain, GitCompare, Terminal, ListChecks, GitBranch, Zap, X, Copy, Target, Sparkles } from 'lucide-react';
 import type { OrganismState } from '../types';
 import { levelTone, fmtTime, fmtPct, fmtMs } from '../ui';
 
@@ -7,11 +7,12 @@ interface Props {
   state: OrganismState;
   onSplice: () => void;
   onDiscard: () => void;
+  onSynthesizeGoal: (nodeId: string, goal: string) => void;
 }
 
-type Tab = 'diff' | 'fitness' | 'log' | 'lineage';
+type Tab = 'diff' | 'fitness' | 'log' | 'lineage' | 'goals';
 
-export function MutationFeed({ state, onSplice, onDiscard }: Props) {
+export function MutationFeed({ state, onSplice, onDiscard, onSynthesizeGoal }: Props) {
   const [tab, setTab] = useState<Tab>('log');
   const [copied, setCopied] = useState(false);
   const live = state.candidate;
@@ -23,7 +24,9 @@ export function MutationFeed({ state, onSplice, onDiscard }: Props) {
     { id: 'fitness', label: 'Fitness', Icon: ListChecks },
     { id: 'log', label: 'Log', Icon: Terminal },
     { id: 'lineage', label: 'Lineage', Icon: GitBranch },
+    { id: 'goals', label: 'Goals', Icon: Target },
   ];
+  const unmetGoals = state.goals.filter((g) => !g.met).length;
 
   const copy = () => {
     if (!cand) return;
@@ -46,6 +49,7 @@ export function MutationFeed({ state, onSplice, onDiscard }: Props) {
           <button key={id} onClick={() => setTab(id)} className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md transition cursor-pointer ${tab === id ? 'bg-purple-950/80 text-purple-200 font-semibold border border-purple-700/50' : 'text-slate-400 hover:text-slate-200'}`}>
             <Icon className="w-3.5 h-3.5" /><span>{label}</span>
             {id === 'diff' && live && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+            {id === 'goals' && unmetGoals > 0 && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
           </button>
         ))}
       </div>
@@ -110,7 +114,15 @@ export function MutationFeed({ state, onSplice, onDiscard }: Props) {
                 <div className="flex justify-between pt-1 border-t border-slate-800"><span className="text-slate-500">speedup at p99</span><span className="text-emerald-300 font-bold">{cand.fitness.speedup}×</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">latency score</span><span className="text-slate-300">{cand.fitness.latencyScore}</span></div>
               </div>
-              <div className="text-[10px] text-slate-500 leading-relaxed">score = 55% pass + 30% contract + 15% latency. Contract: every key the incumbent emitted must be present, and downstream nodes must accept the output.</div>
+              {cand.fitness.goal && (
+                <div className="p-2.5 rounded-lg bg-teal-950/30 border border-teal-800/50 space-y-1">
+                  <div className="flex justify-between"><span className="text-teal-300 font-bold">goal · {cand.fitness.goal.name}</span><span className="text-slate-400">target {cand.fitness.goal.target}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">train (shown to model)</span><span className="text-slate-300">{cand.fitness.goal.train}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">holdout ({cand.fitness.goal.holdoutCount} hidden)</span><span className={cand.fitness.goal.holdout >= cand.fitness.goal.target ? 'text-emerald-300 font-bold' : 'text-rose-300 font-bold'}>{cand.fitness.goal.holdout}</span></div>
+                  {cand.fitness.goal.train - cand.fitness.goal.holdout > 0.25 && <div className="text-[10px] text-amber-300 pt-1 border-t border-teal-900">train/holdout gap suggests the candidate hardcoded the examples</div>}
+                </div>
+              )}
+              <div className="text-[10px] text-slate-500 leading-relaxed">{cand.fitness.goal ? 'score = 25% pass + 15% contract + 10% latency + 50% goal holdout.' : 'score = 55% pass + 30% contract + 15% latency.'} Contract: every key the incumbent emitted must be present, and downstream nodes must accept the output.</div>
               {cand.fitness.failures.length > 0 && (
                 <div className="p-2.5 rounded-lg bg-rose-950/30 border border-rose-800/50 space-y-1">
                   <div className="text-rose-300 font-bold">still throws</div>
@@ -151,6 +163,44 @@ export function MutationFeed({ state, onSplice, onDiscard }: Props) {
                 <div className="flex justify-between"><span className="font-bold text-slate-200">gen {e.generation} · {e.nodeId}</span><span className="text-slate-500">{fmtTime(e.ts)}</span></div>
                 <div className="flex justify-between text-slate-400"><span>{e.provider} / {e.model}</span><span>fitness {e.fitnessScore} · {e.speedup}×</span></div>
                 <div className="text-slate-500 text-[10px]">{e.parentHash.slice(0, 10)} → {e.hash.slice(0, 10)}{e.rolledBack && <span className="text-orange-400 ml-2">rolled back</span>}</div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      {tab === 'goals' && (
+        <div className="flex-1 overflow-auto min-h-0 space-y-2.5 font-mono text-[11px]">
+          {state.goals.length === 0 ? <Empty text="No goals. Drop a JSON file in ./goals/ with a description, a target node, and input/expected examples. A third are held out from the model." /> :
+            state.goals.map((g) => (
+              <div key={g.name} className={`p-3 rounded-lg border space-y-2 ${g.met ? 'bg-emerald-950/20 border-emerald-800/50' : 'bg-amber-950/15 border-amber-800/50'}`}>
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <div className="font-bold text-slate-100 flex items-center gap-2">{g.name}<span className={`text-[9px] px-1.5 py-0.5 rounded border ${g.met ? 'border-emerald-700 text-emerald-300' : 'border-amber-700 text-amber-300'}`}>{g.met ? 'met' : 'unmet'}</span>{state.activeGoal === g.name && <span className="text-[9px] px-1.5 py-0.5 rounded border border-purple-700 text-purple-300">active</span>}</div>
+                    <div className="text-slate-400 leading-relaxed mt-0.5">{g.description}</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center pt-1 border-t border-slate-800/60">
+                  <Stat label={`train · ${g.trainCount}`} v={String(g.train)} tone="text-slate-300" />
+                  <Stat label={`holdout · ${g.holdoutCount}`} v={String(g.holdout)} tone={g.met ? 'text-emerald-300' : 'text-amber-300'} />
+                  <Stat label="target" v={String(g.target)} tone="text-slate-400" />
+                </div>
+                {g.worstMisses.length > 0 && (
+                  <div className="space-y-1 pt-1 border-t border-slate-800/60">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wider">worst misses</div>
+                    {g.worstMisses.map((m, i) => (
+                      <div key={i} className="text-[10px] leading-relaxed">
+                        <span className="text-slate-500">{m.input}</span> <span className="text-slate-600">[{m.split}]</span>
+                        <div className="pl-2"><span className="text-emerald-400/80">want</span> {m.expected} <span className="text-rose-400/80 ml-2">got</span> {m.actual}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center justify-between pt-1 border-t border-slate-800/60">
+                  <span className="text-[10px] text-slate-500">rewrites {g.nodeId}</span>
+                  <button onClick={() => onSynthesizeGoal(g.nodeId, g.name)} disabled={state.phase !== 'idle'} className="px-2.5 py-1 rounded bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 border border-purple-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-[10px]">
+                    <Sparkles className="w-3 h-3" /> synthesize toward goal
+                  </button>
+                </div>
               </div>
             ))}
         </div>

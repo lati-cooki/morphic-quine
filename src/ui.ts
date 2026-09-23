@@ -28,6 +28,7 @@ export const levelTone: Record<LogLevel, string> = {
   EVAL: 'bg-indigo-950 text-indigo-300 border-indigo-800/60',
   SPLICE: 'bg-emerald-950 text-emerald-300 border-emerald-800/60',
   ROLLBACK: 'bg-orange-950 text-orange-300 border-orange-800/60',
+  GOAL: 'bg-teal-950 text-teal-300 border-teal-800/60',
 };
 
 export const fmtMs = (n: number) => (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2)) + ' ms';

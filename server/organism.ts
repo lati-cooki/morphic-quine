@@ -9,7 +9,8 @@ import { selectProvider, type Provider } from './mutator';
 import { compileFunction, type CompiledFn } from './sandbox';
 import { evaluateCandidate } from './evaluator';
 import { diffLines } from './diff';
-import type { CandidateView, EventLog, LogLevel, OrganismState, Phase } from '../src/types';
+import { loadGoals, scoreGoal, scoreOutput, splitOf, type Goal, type GoalScore } from './goals';
+import type { CandidateView, EventLog, GoalView, LogLevel, OrganismState, Phase } from '../src/types';
 
 interface Candidate extends CandidateView {
   compiled: CompiledFn;
@@ -24,6 +25,12 @@ export interface OrganismOptions {
   spliceThreshold?: number;
   autonomous?: boolean;
   maxAttempts?: number;
+  /** Override provider selection (tests). */
+  provider?: Provider;
+  /** Directory of goal JSON files. Defaults to <rootDir>/goals. */
+  goalsDir?: string;
+  /** Seconds between goal-driven synthesis attempts for the same goal. */
+  goalCooldownMs?: number;
 }
 
 /**
@@ -47,7 +54,11 @@ export class Organism extends EventEmitter {
   private maxAttempts: number;
   private timers: NodeJS.Timeout[] = [];
   private started = Date.now();
-  private opts: Required<OrganismOptions>;
+  private opts: Required<Omit<OrganismOptions, 'provider' | 'goalsDir'>> & { goalsDir: string };
+  private goals: Goal[] = [];
+  private goalScores = new Map<string, GoalScore>();
+  private goalLastTry = new Map<string, number>();
+  private activeGoal: string | null = null;
 
   constructor(opts: OrganismOptions) {
     super();
@@ -57,19 +68,35 @@ export class Organism extends EventEmitter {
       spliceThreshold: 85,
       autonomous: true,
       maxAttempts: 2,
+      goalCooldownMs: 30_000,
+      goalsDir: opts.goalsDir ?? path.join(opts.rootDir, 'goals'),
       ...opts,
     };
     this.lineage = new Lineage(path.join(opts.rootDir, 'lineage'));
     const sel = selectProvider();
-    this.provider = sel.active;
-    this.providersAvailable = sel.available;
+    this.provider = opts.provider ?? sel.active;
+    this.providersAvailable = opts.provider ? [opts.provider.name] : sel.available;
+    try { this.goals = loadGoals(this.opts.goalsDir); } catch (err) { this.log('GOAL', `Could not load goals: ${(err as Error).message}`); }
     this.autonomous = this.opts.autonomous;
     this.spliceThreshold = this.opts.spliceThreshold;
     this.maxAttempts = this.opts.maxAttempts;
     const replayed = this.replayLineage();
     this.log('INFO', `Engine up. ${this.pipeline.order.length} nodes compiled in isolated contexts. Lineage generation ${this.lineage.generation}${replayed ? `, ${replayed} splice${replayed === 1 ? '' : 's'} replayed from disk` : ''}.`);
     this.log('INFO', `Patch provider: ${this.provider.name} (${this.provider.model}). Available: ${this.providersAvailable.join(', ')}.`);
+    if (this.goals.length) {
+      this.rescoreGoals();
+      for (const g of this.goals) {
+        const sc = this.goalScores.get(g.name)!;
+        this.log('GOAL', `Goal "${g.name}" loaded: ${g.examples.length} examples (${sc.trainCount} train / ${sc.holdoutCount} holdout), target ${g.target}. Holdout score ${sc.holdout}.`);
+      }
+    }
   }
+
+  private rescoreGoals() {
+    for (const g of this.goals) this.goalScores.set(g.name, scoreGoal(g, (input) => this.pipeline.dryRun(input).output));
+  }
+
+  private goalTarget(g: Goal): string { return g.nodeId ?? this.pipeline.order[this.pipeline.order.length - 1]; }
 
   /** Lineage is the source of truth for what code is live: reapply every active splice, oldest first. */
   private replayLineage(): number {
@@ -124,6 +151,13 @@ export class Organism extends EventEmitter {
         this.rollback('sentinel');
       } else if (obs.verdict === 'pass') {
         this.log('SENTINEL', `${node.spec.name} stable after splice: ${obs.detail}.`);
+        if (this.activeGoal) {
+          this.rescoreGoals();
+          const g = this.goals.find((x) => x.name === this.activeGoal)!;
+          const sc = this.goalScores.get(g.name)!;
+          this.log('GOAL', `Goal "${g.name}" now scores ${sc.holdout} on holdout (target ${g.target}): ${sc.holdout >= g.target ? 'met' : 'still unmet'}.`);
+        }
+        this.activeGoal = null;
         this.phase = 'idle';
         this.targetNodeId = null;
         this.emitState();
@@ -139,26 +173,67 @@ export class Organism extends EventEmitter {
       }
     }
 
+    if (this.phase === 'idle' && this.goals.length) {
+      this.rescoreGoals();
+      if (this.autonomous) {
+        const now = Date.now();
+        const unmet = this.goals.find((g) => {
+          const sc = this.goalScores.get(g.name)!;
+          return sc.holdout < g.target && now - (this.goalLastTry.get(g.name) ?? -Infinity) > this.opts.goalCooldownMs;
+        });
+        if (unmet) {
+          const sc = this.goalScores.get(unmet.name)!;
+          this.goalLastTry.set(unmet.name, now);
+          this.log('GOAL', `Goal "${unmet.name}" unmet: holdout ${sc.holdout} < target ${unmet.target}. Synthesizing toward it on ${this.goalTarget(unmet)}.`);
+          void this.synthesize(this.goalTarget(unmet), unmet.name);
+        }
+      }
+    }
+
     if (this.phase === 'candidate_ready' && this.autonomous && this.candidate) {
       if (this.candidate.fitness.score >= this.spliceThreshold) this.splice('sentinel');
     }
     this.emitState();
   }
 
-  async synthesize(nodeId?: string): Promise<void> {
+  async synthesize(nodeId?: string, goalName?: string): Promise<void> {
     if (this.phase === 'synthesizing') return;
-    const target = nodeId ?? this.worstNode();
+    const goal = goalName ? this.goals.find((g) => g.name === goalName) : undefined;
+    if (goalName && !goal) { this.log('GOAL', `Unknown goal ${goalName}.`); return; }
+    const target = nodeId ?? (goal ? this.goalTarget(goal) : this.worstNode());
     const node = this.pipeline.nodes.get(target);
     if (!node) { this.log('SYNTH', `Unknown node ${target}.`); return; }
 
     this.phase = 'synthesizing';
     this.targetNodeId = target;
+    this.activeGoal = goal?.name ?? null;
     this.candidate = null;
+    if (goal) this.goalLastTry.set(goal.name, Date.now());
     const baseline = node.windowStats();
     const corpus = node.corpus();
     const downstream = this.pipeline.downstreamOf(target);
-    this.log('SYNTH', `Requesting patch for ${node.spec.name} from ${this.provider.name}/${this.provider.model}.`, `${node.recentFailures().length} recorded failures, ${node.recentSlow().length} slow inputs, ${corpus.length} corpus samples.`);
+    this.log('SYNTH', `Requesting ${goal ? `goal-directed rewrite` : 'patch'} for ${node.spec.name} from ${this.provider.name}/${this.provider.model}.`, `${node.recentFailures().length} recorded failures, ${node.recentSlow().length} slow inputs, ${corpus.length} corpus samples${goal ? `, goal "${goal.name}"` : ''}.`);
     this.emitState();
+
+    // Goal examples for the prompt: training split only, with the node's actual input and the pipeline's current output.
+    const goalExamples = goal
+      ? goal.examples.filter((ex) => splitOf(ex) === 'train').map((ex) => {
+          let nodeInput: unknown = undefined; let actual: unknown;
+          try { const r = this.pipeline.dryRun(ex.input); nodeInput = r.nodeInputs.get(target); actual = r.output; }
+          catch (err) { actual = { error: err instanceof Error ? err.message : String(err) }; }
+          return { pipelineInput: ex.input, nodeInput, expected: ex.expected, actual };
+        })
+      : undefined;
+    if (goal) {
+      const upstream = new Map<string, number>();
+      for (const ex of goal.examples) {
+        try { this.pipeline.dryRun(ex.input); }
+        catch (err) { const id = (err as { nodeId?: string }).nodeId; if (id && id !== target) upstream.set(id, (upstream.get(id) ?? 0) + 1); }
+      }
+      for (const [id, n] of upstream) this.log('GOAL', `${n} goal example${n > 1 ? 's' : ''} fail upstream in ${this.pipeline.nodes.get(id)!.spec.name} before reaching ${node.spec.name}. Rewriting ${node.spec.name} cannot fix those; repair ${this.pipeline.nodes.get(id)!.spec.name} first.`);
+    }
+    // Goal inputs also join the corpus so pass/contract are checked on them too.
+    if (goal) for (const ex of goal.examples) { try { corpus.push(this.pipeline.dryRun(ex.input).nodeInputs.get(target)); } catch { /* upstream failed; nothing to feed this node */ } }
 
     let feedback: string | undefined;
     let best: Candidate | null = null;
@@ -170,9 +245,17 @@ export class Organism extends EventEmitter {
           slow: node.recentSlow().map((s) => ({ input: s.input, latencyMs: s.latencyMs })),
           downstream: downstream.map((d) => ({ name: d.spec.name, source: d.source })),
           feedback,
+          goal: goal && goalExamples ? { name: goal.name, description: goal.description, examples: goalExamples.filter((e) => scoreOf(goal, e) < 1).slice(0, 8).concat(goalExamples.filter((e) => scoreOf(goal, e) >= 1).slice(0, 2)) } : undefined,
         });
         const compiled = compileFunction(patch.source);
-        const fitness = evaluateCandidate({ candidate: compiled, incumbent: node.fn, corpus, downstream: downstream.map((d) => d.fn) });
+        const overrides = new Map([[target, compiled]]);
+        const fitness = evaluateCandidate({
+          candidate: compiled,
+          incumbent: node.fn,
+          corpus,
+          downstream: downstream.map((d) => d.fn),
+          goal: goal ? { goal, run: (input) => this.pipeline.dryRun(input, overrides).output } : undefined,
+        });
         const cand: Candidate = {
           id: `candidate_${target}`,
           targetNodeId: target,
@@ -189,7 +272,8 @@ export class Organism extends EventEmitter {
           prompt: patch.prompt,
           baseline,
         };
-        this.log('EVAL', `Attempt ${attempt}: fitness ${fitness.score} on ${fitness.corpusSize} recorded inputs. pass ${pct(fitness.passRate)}, contract ${pct(fitness.contractRate)}, p99 ${fitness.candidate.p99}ms vs ${fitness.incumbent.p99}ms (${fitness.speedup}x).`);
+        this.log('EVAL', `Attempt ${attempt}: fitness ${fitness.score} on ${fitness.corpusSize} inputs. pass ${pct(fitness.passRate)}, contract ${pct(fitness.contractRate)}, p99 ${fitness.candidate.p99}ms vs ${fitness.incumbent.p99}ms (${fitness.speedup}x)${fitness.goal ? `, goal train ${fitness.goal.train} / holdout ${fitness.goal.holdout}` : ''}.`);
+        if (fitness.goal && fitness.goal.train - fitness.goal.holdout > 0.25) this.log('EVAL', `Attempt ${attempt}: train/holdout gap ${(fitness.goal.train - fitness.goal.holdout).toFixed(2)}. The candidate fits the shown examples better than the hidden ones; likely hardcoded.`);
         if (!best || fitness.score > best.fitness.score) best = cand;
         if (fitness.score >= this.spliceThreshold) break;
         feedback = describeShortfall(cand);
@@ -202,6 +286,8 @@ export class Organism extends EventEmitter {
 
     if (!best) {
       this.phase = 'idle';
+      this.targetNodeId = null;
+      this.activeGoal = null;
       this.log('SYNTH', `No usable candidate for ${node.spec.name}.`);
     } else {
       this.candidate = best;
@@ -237,6 +323,7 @@ export class Organism extends EventEmitter {
     this.lastCandidate = { ...cand, outcome: 'spliced' };
     this.candidate = null;
     this.phase = 'observing';
+    this.rescoreGoals();
     this.emitState();
   }
 
@@ -245,6 +332,7 @@ export class Organism extends EventEmitter {
     this.log('SYNTH', `Candidate for ${this.candidate.targetNodeId} discarded.`);
     this.lastCandidate = { ...this.candidate, outcome: 'discarded' };
     this.candidate = null;
+    this.activeGoal = null;
     this.phase = 'idle';
     this.targetNodeId = null;
     this.emitState();
@@ -258,9 +346,11 @@ export class Organism extends EventEmitter {
     this.lineage.markRolledBack(entry.generation);
     this.sentinel.cancelObservation(entry.nodeId);
     this.log('ROLLBACK', `${node.spec.name} reverted to v${node.version - 2} source by ${by}. Generation ${entry.generation} marked rolled back.`);
+    this.rescoreGoals();
     this.phase = 'idle';
     this.targetNodeId = null;
     this.candidate = null;
+    this.activeGoal = null;
     this.emitState();
   }
 
@@ -324,8 +414,26 @@ export class Organism extends EventEmitter {
       vitals: this.telemetry.vitals(),
       logs: this.logs.slice(-60),
       lineage: this.lineage.list(),
+      goals: this.goals.map((g) => this.goalView(g)),
+      activeGoal: this.activeGoal,
       provider: { active: this.provider.name, model: this.provider.model, available: this.providersAvailable },
       canRollback: Boolean(this.lineage.latestActive()),
+    };
+  }
+
+  private goalView(g: Goal): GoalView {
+    const sc = this.goalScores.get(g.name) ?? scoreGoal(g, (input) => this.pipeline.dryRun(input).output);
+    return {
+      name: g.name,
+      description: g.description,
+      nodeId: this.goalTarget(g),
+      target: g.target,
+      train: sc.train,
+      holdout: sc.holdout,
+      trainCount: sc.trainCount,
+      holdoutCount: sc.holdoutCount,
+      met: sc.holdout >= g.target,
+      worstMisses: sc.misses.slice(0, 6).map((m) => ({ input: preview(m.input, 100), expected: preview(m.expected, 80), actual: preview(pick(m.actual, m.expected), 100), split: m.split })),
     };
   }
 
@@ -354,11 +462,25 @@ function describeShortfall(c: Candidate): string {
   if (c.fitness.failures.length) parts.push(`Still throws on:\n${c.fitness.failures.map((f) => `- ${f.input} → ${f.error}`).join('\n')}`);
   if (c.fitness.contractViolations.length) parts.push(`Contract violations:\n${c.fitness.contractViolations.map((v) => `- ${v.input} → ${v.reason}`).join('\n')}`);
   if (c.fitness.latencyScore < 1) parts.push(`p99 latency ${c.fitness.candidate.p99}ms is over the 5ms budget.`);
+  if (c.fitness.goal && c.fitness.goal.holdout < c.fitness.goal.target) parts.push(`Goal "${c.fitness.goal.name}" scored ${c.fitness.goal.holdout} on examples you were not shown (target ${c.fitness.goal.target}). Implement the rule described in the goal for the general case; do not special-case the listed inputs.`);
   return parts.join('\n');
 }
 
 function preview(v: unknown, max = 160): string {
   try { const s = JSON.stringify(v) ?? 'undefined'; return s.length > max ? s.slice(0, max - 1) + '…' : s; } catch { return String(v); }
+}
+function scoreOf(goal: Goal, e: { expected: Record<string, unknown>; actual: unknown }): number {
+  return scoreOutputSafe(goal, e.expected, e.actual);
+}
+function scoreOutputSafe(goal: Goal, expected: Record<string, unknown>, actual: unknown): number {
+  try { return scoreOutput(goal, expected, actual); } catch { return 0; }
+}
+/** Show only the fields the goal cares about from the actual output, so misses read side by side. */
+function pick(actual: unknown, expected: Record<string, unknown>): unknown {
+  if (typeof actual !== 'object' || actual === null) return actual;
+  const a = actual as Record<string, unknown>;
+  if ('error' in a && Object.keys(a).length === 1) return a;
+  return Object.fromEntries(Object.keys(expected).map((k) => [k, a[k]]));
 }
 function pct(n: number) { return `${Math.round(n * 100)}%`; }
 function round(n: number) { return Math.round(n * 100) / 100; }

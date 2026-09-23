@@ -1,6 +1,8 @@
 import { performance } from 'node:perf_hooks';
 import type { CompiledFn } from './sandbox';
 import type { FitnessReport, LatencyStats } from '../src/types';
+import type { Goal, GoalScore } from './goals';
+import { scoreGoal } from './goals';
 
 export interface EvaluateInput {
   candidate: CompiledFn;
@@ -10,9 +12,13 @@ export interface EvaluateInput {
   downstream: CompiledFn[];
   /** p99 at or under this scores 1.0 on latency. */
   latencyBudgetMs?: number;
+  /** When set, the candidate is also scored on the goal's holdout examples via a full pipeline run. */
+  goal?: { goal: Goal; run: (input: unknown) => unknown };
 }
 
 const WEIGHTS = { pass: 0.55, contract: 0.30, latency: 0.15 };
+/** With a goal active the goal term dominates; contract stays as a floor via downstream acceptance. */
+const GOAL_WEIGHTS = { pass: 0.25, contract: 0.15, latency: 0.10, goal: 0.50 };
 
 function quantiles(values: number[]): LatencyStats {
   const s = values.slice().sort((a, b) => a - b);
@@ -106,7 +112,16 @@ export function evaluateCandidate(args: EvaluateInput): FitnessReport {
   const cand = quantiles(candidateLat);
   const inc = quantiles(incumbentLat);
   const latencyScore = cand.p99 <= budget ? 1 : Math.max(0, Math.min(1, budget / cand.p99));
-  const score = Math.round(100 * (WEIGHTS.pass * passRate + WEIGHTS.contract * contractRate + WEIGHTS.latency * latencyScore) * 10) / 10;
+
+  let goalScore: GoalScore | undefined;
+  let score: number;
+  if (args.goal) {
+    goalScore = scoreGoal(args.goal.goal, args.goal.run);
+    score = 100 * (GOAL_WEIGHTS.pass * passRate + GOAL_WEIGHTS.contract * contractRate + GOAL_WEIGHTS.latency * latencyScore + GOAL_WEIGHTS.goal * goalScore.holdout);
+  } else {
+    score = 100 * (WEIGHTS.pass * passRate + WEIGHTS.contract * contractRate + WEIGHTS.latency * latencyScore);
+  }
+  score = Math.round(score * 10) / 10;
 
   return {
     score,
@@ -119,5 +134,6 @@ export function evaluateCandidate(args: EvaluateInput): FitnessReport {
     speedup: round(cand.p99 > 0 ? inc.p99 / cand.p99 : 1),
     failures: failures.slice(0, 8),
     contractViolations: violations.slice(0, 8),
+    goal: goalScore ? { name: args.goal!.goal.name, train: goalScore.train, holdout: goalScore.holdout, holdoutCount: goalScore.holdoutCount, target: args.goal!.goal.target } : undefined,
   };
 }

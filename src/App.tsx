@@ -47,7 +47,7 @@ export default function App() {
       <main className="flex-1 p-3 sm:p-4 flex flex-col xl:flex-row gap-3.5 min-h-0">
         <Vitals vitals={state.vitals} nodes={state.nodes} onInject={engine.inject} />
         <LivingGraph state={state} selectedNodeId={selectedNodeId} onSelectNode={setSelectedNodeId} onSplice={engine.splice} />
-        <MutationFeed state={state} onSplice={engine.splice} onDiscard={engine.discard} />
+        <MutationFeed state={state} onSplice={engine.splice} onDiscard={engine.discard} onSynthesizeGoal={(nodeId, goal) => engine.synthesize(nodeId, goal)} />
       </main>
 
       <LineageBar state={state} onExport={engine.exportSnapshot} />
