@@ -1,6 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import vm from 'node:vm';
+
+/** Ceiling for one model call. The loop's own timeout sits 5s above this. */
+export const PROVIDER_TIMEOUT_MS = Math.max(30_000, Number(process.env.PROVIDER_TIMEOUT_MS) || 120_000);
 import { extractFunctionSource } from './sandbox';
 import type { AttackRequest, Attacker } from './attacker';
 
@@ -132,7 +135,7 @@ export class AnthropicProvider implements Provider {
   }
 
   async synthesize(req: PatchRequest): Promise<PatchResult> {
-    if (!this.client) this.client = new Anthropic({ timeout: 120_000 });
+    if (!this.client) this.client = new Anthropic({ timeout: PROVIDER_TIMEOUT_MS - 5_000 });
     const prompt = buildPrompt(req);
     const response = await this.client.messages.create({
       model: this.model,
@@ -148,7 +151,7 @@ export class AnthropicProvider implements Provider {
   }
 
   async attack(req: AttackRequest): Promise<unknown[]> {
-    if (!this.client) this.client = new Anthropic({ timeout: 120_000 });
+    if (!this.client) this.client = new Anthropic({ timeout: PROVIDER_TIMEOUT_MS - 5_000 });
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: 16000,
@@ -171,7 +174,7 @@ export class GeminiProvider implements Provider {
   }
 
   async synthesize(req: PatchRequest): Promise<PatchResult> {
-    if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!, httpOptions: { timeout: 90_000 } });
+    if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!, httpOptions: { timeout: PROVIDER_TIMEOUT_MS - 5_000 } });
     const prompt = buildPrompt(req);
     const response = await this.client.models.generateContent({
       model: this.model,

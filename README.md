@@ -30,7 +30,8 @@ ANTHROPIC_API_KEY=...   # claude-opus-5 by default; override with ANTHROPIC_MODE
 GEMINI_API_KEY=...      # gemini-2.5-flash by default; override with GEMINI_MODEL
 ```
 
-`MUTATOR_PROVIDER=anthropic|gemini|reference` forces a provider. Copy `.env.example` to `.env.local`.
+`MUTATOR_PROVIDER=anthropic|gemini|reference` forces a provider. `PROVIDER_TIMEOUT_MS` caps each model
+call (default 120000; Gemini 2.5 Pro on a large prompt can need 180000). Copy `.env.example` to `.env.local`.
 
 ## The loop
 

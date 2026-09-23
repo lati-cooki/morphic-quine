@@ -5,7 +5,7 @@ import { loadPipeline, trafficFor, listPipelines, type PipelineDef } from './pip
 import { Telemetry } from './telemetry';
 import { Sentinel, DEFAULT_SENTINEL } from './sentinel';
 import { Lineage, exportSnapshot } from './lineage';
-import { selectProvider, ProviderAttacker, type Provider } from './mutator';
+import { selectProvider, ProviderAttacker, PROVIDER_TIMEOUT_MS, type Provider } from './mutator';
 import { FuzzAttacker, CompositeAttacker, runAttacks, previewInput, withTimeout, type Attacker, type AttackHit } from './attacker';
 import fs from 'node:fs';
 import { compileFunction, type CompiledFn } from './sandbox';
@@ -92,7 +92,7 @@ export class Organism extends EventEmitter {
       goalCooldownMs: 30_000,
       attackRounds: 2,
       attackBatch: 32,
-      providerTimeoutMs: 120_000,
+      providerTimeoutMs: PROVIDER_TIMEOUT_MS,
       pipeline: opts.pipeline ?? 'default',
       goalsDir: opts.goalsDir ?? path.join(this.def.dir, 'goals'),
       ...opts,
