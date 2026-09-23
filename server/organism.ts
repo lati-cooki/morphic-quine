@@ -6,7 +6,7 @@ import { Telemetry } from './telemetry';
 import { Sentinel, DEFAULT_SENTINEL } from './sentinel';
 import { Lineage, exportSnapshot } from './lineage';
 import { selectProvider, ProviderAttacker, type Provider } from './mutator';
-import { FuzzAttacker, CompositeAttacker, runAttacks, previewInput, type Attacker, type AttackHit } from './attacker';
+import { FuzzAttacker, CompositeAttacker, runAttacks, previewInput, withTimeout, type Attacker, type AttackHit } from './attacker';
 import fs from 'node:fs';
 import { compileFunction, type CompiledFn } from './sandbox';
 import { performance } from 'node:perf_hooks';
@@ -42,6 +42,8 @@ export interface OrganismOptions {
   attackRounds?: number;
   /** Adversarial inputs requested per round. */
   attackBatch?: number;
+  /** Hard ceiling on any single provider or attacker call. */
+  providerTimeoutMs?: number;
 }
 
 /**
@@ -73,6 +75,7 @@ export class Organism extends EventEmitter {
   private goals: Goal[] = [];
   private goalScores = new Map<string, GoalScore>();
   private goalLastTry = new Map<string, number>();
+  private goalFeedback = new Map<string, string>();
   private activeGoal: string | null = null;
 
   constructor(opts: OrganismOptions) {
@@ -89,6 +92,7 @@ export class Organism extends EventEmitter {
       goalCooldownMs: 30_000,
       attackRounds: 2,
       attackBatch: 32,
+      providerTimeoutMs: 120_000,
       pipeline: opts.pipeline ?? 'default',
       goalsDir: opts.goalsDir ?? path.join(this.def.dir, 'goals'),
       ...opts,
@@ -183,13 +187,13 @@ export class Organism extends EventEmitter {
   private async attack(nodeId: string, fn: CompiledFn, label: string): Promise<{ tried: number; hits: AttackHit[] }> {
     const node = this.pipeline.nodes.get(nodeId)!;
     const downstream = this.pipeline.downstreamOf(nodeId);
-    const inputs = await this.attacker.generate({
+    const inputs = await withTimeout(this.attacker.generate({
       node: { id: nodeId, name: node.spec.name, role: node.spec.role, source: fn.source, depth: this.pipeline.depthOf(nodeId) },
       samples: node.sampleInputs(),
       downstream: downstream.map((d) => ({ name: d.spec.name, source: d.source })),
       known: node.adversarial.slice(-20),
       max: this.opts.attackBatch,
-    });
+    }), this.opts.providerTimeoutMs, `${this.attacker.name} attack`);
     const warnings = (inputs as unknown[] & { warnings?: string[] }).warnings;
     if (warnings?.length) this.log('ATTACK', `Part of the red team failed: ${warnings.join('; ')}`);
     const hits = runAttacks(fn, inputs, downstream.map((d) => d.fn));
@@ -283,6 +287,7 @@ export class Organism extends EventEmitter {
           const g = this.goals.find((x) => x.name === this.activeGoal)!;
           const sc = this.goalScores.get(g.name)!;
           this.log('GOAL', `Goal "${g.name}" now scores ${sc.holdout} on holdout (target ${g.target}): ${sc.holdout >= g.target ? 'met' : 'still unmet'}.`);
+          if (sc.holdout >= g.target) this.goalFeedback.delete(g.name);
         }
         this.activeGoal = null;
         this.phase = 'idle';
@@ -325,7 +330,19 @@ export class Organism extends EventEmitter {
     }
 
     if (this.phase === 'candidate_ready' && this.autonomous && this.candidate) {
-      if (this.candidate.fitness.score >= this.spliceThreshold) this.splice('sentinel');
+      const c = this.candidate;
+      if (c.fitness.score >= this.spliceThreshold) {
+        // A goal candidate has to move the holdout score, not just clear the composite threshold.
+        const g = c.fitness.goal;
+        const current = g ? this.goalScores.get(g.name)?.holdout ?? 0 : 0;
+        if (g && g.holdout < g.target && g.holdout <= current) {
+          this.log('EVAL', `Holding candidate for ${c.targetNodeId}: goal "${g.name}" holdout ${g.holdout} does not improve on the live ${current} and is below target ${g.target}. Discarding; next attempt will carry this feedback.`);
+          this.goalFeedback.set(g.name, `The previous candidate scored ${g.holdout} on hidden examples, no better than the current code (${current}). It did not generalise. Re-read the goal description and implement the rule it states for all cases, not only the listed examples.`);
+          this.discard();
+        } else {
+          this.splice('sentinel');
+        }
+      }
     }
     this.emitState();
   }
@@ -369,19 +386,19 @@ export class Organism extends EventEmitter {
     // Goal inputs also join the corpus so pass/contract are checked on them too.
     if (goal) for (const ex of goal.examples) { try { corpus.push(this.pipeline.dryRun(ex.input).nodeInputs.get(target)); } catch { /* upstream failed; nothing to feed this node */ } }
 
-    let feedback: string | undefined;
+    let feedback: string | undefined = goal ? this.goalFeedback.get(goal.name) : undefined;
     let best: Candidate | null = null;
     let attackRoundsUsed = 0;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
       try {
-        const patch = await this.provider.synthesize({
+        const patch = await withTimeout(this.provider.synthesize({
           node: { id: target, name: node.spec.name, role: node.spec.role, source: node.source },
           failures: node.recentFailures().map((f) => ({ input: f.input, error: f.error ?? 'unknown' })),
           slow: node.recentSlow().map((s) => ({ input: s.input, latencyMs: s.latencyMs })),
           downstream: downstream.map((d) => ({ name: d.spec.name, source: d.source })),
           feedback,
           goal: goal && goalExamples ? { name: goal.name, description: goal.description, examples: goalExamples.filter((e) => scoreOf(goal, e) < 1).slice(0, 8).concat(goalExamples.filter((e) => scoreOf(goal, e) >= 1).slice(0, 2)) } : undefined,
-        });
+        }), this.opts.providerTimeoutMs, `${this.provider.name} synthesize`);
         const compiled = compileFunction(patch.source);
         const overrides = new Map([[target, compiled]]);
         const fitness = evaluateCandidate({

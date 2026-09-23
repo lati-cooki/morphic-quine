@@ -56,6 +56,12 @@ export function buildAttackPrompt(req: AttackRequest): string {
   return parts.join('\n\n');
 }
 
+function noFunction(text: string): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  const snippet = t.length > 300 ? `${t.slice(0, 150)} … ${t.slice(-150)}` : t;
+  return `No function found in model output (${text.length} chars): ${snippet || '<empty>'}`;
+}
+
 export function parseAttackList(text: string, max: number): unknown[] {
   const cleaned = text.replace(/```(?:json|js|javascript)?/gi, '').replace(/```/g, '').trim();
   const start = cleaned.indexOf('[');
@@ -126,7 +132,7 @@ export class AnthropicProvider implements Provider {
   }
 
   async synthesize(req: PatchRequest): Promise<PatchResult> {
-    if (!this.client) this.client = new Anthropic();
+    if (!this.client) this.client = new Anthropic({ timeout: 120_000 });
     const prompt = buildPrompt(req);
     const response = await this.client.messages.create({
       model: this.model,
@@ -137,12 +143,12 @@ export class AnthropicProvider implements Provider {
     if (response.stop_reason === 'refusal') throw new Error('Model declined the request');
     const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     const source = extractFunctionSource(text);
-    if (!source) throw new Error('No function found in model output');
+    if (!source) throw new Error(noFunction(text));
     return { source, provider: this.name, model: this.model, prompt };
   }
 
   async attack(req: AttackRequest): Promise<unknown[]> {
-    if (!this.client) this.client = new Anthropic();
+    if (!this.client) this.client = new Anthropic({ timeout: 120_000 });
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: 16000,
@@ -165,19 +171,19 @@ export class GeminiProvider implements Provider {
   }
 
   async synthesize(req: PatchRequest): Promise<PatchResult> {
-    if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!, httpOptions: { timeout: 90_000 } });
     const prompt = buildPrompt(req);
     const response = await this.client.models.generateContent({
       model: this.model,
       contents: `${SYSTEM}\n\n${prompt}`,
     });
     const source = extractFunctionSource(response.text ?? '');
-    if (!source) throw new Error('No function found in model output');
+    if (!source) throw new Error(noFunction(response.text ?? ''));
     return { source, provider: this.name, model: this.model, prompt };
   }
 
   async attack(req: AttackRequest): Promise<unknown[]> {
-    if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!, httpOptions: { timeout: 60_000 } });
     const response = await this.client.models.generateContent({ model: this.model, contents: `${ATTACK_SYSTEM}\n\n${buildAttackPrompt(req)}` });
     return parseAttackList(response.text ?? '', req.max);
   }

@@ -123,12 +123,12 @@ export function previewInput(v: unknown, max = 160): string {
 
 /** Runs several attackers and merges their inputs. The fuzzer is cheap and deterministic, so it always rides along with an LLM attacker. */
 export class CompositeAttacker implements Attacker {
-  constructor(private parts: Attacker[]) {}
+  constructor(private parts: Attacker[], private partTimeoutMs = 60_000) {}
   get name() { return this.parts.map((p) => p.name).join('+'); }
   get model() { return this.parts.map((p) => p.model).join('+'); }
   async generate(req: AttackRequest): Promise<unknown[]> {
     const per = Math.max(4, Math.ceil(req.max / this.parts.length));
-    const results = await Promise.allSettled(this.parts.map((p) => p.generate({ ...req, max: per })));
+    const results = await Promise.allSettled(this.parts.map((p) => withTimeout(p.generate({ ...req, max: per }), this.partTimeoutMs, `${p.name} attacker`)));
     const seen = new Set<string>();
     const out: unknown[] = [];
     const errors: string[] = [];
@@ -141,4 +141,10 @@ export class CompositeAttacker implements Attacker {
     if (errors.length) result.warnings = errors;
     return result;
   }
+}
+
+export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let t: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => { t = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms); });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t)) as Promise<T>;
 }

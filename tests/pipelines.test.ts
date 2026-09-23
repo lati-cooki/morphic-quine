@@ -40,7 +40,11 @@ describe('Organism on the logs pipeline', () => {
   it('boots, scores both goals as unmet, and keeps lineage beside the pipeline', () => {
     // Copy the pipeline into a temp root so lineage/corpus writes stay out of the repo.
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'morphic-'));
-    fs.cpSync(path.join(process.cwd(), 'pipelines', 'logs'), path.join(tmp, 'pipelines', 'logs'), { recursive: true });
+    // Copy the definition and goals only; a live engine may have written lineage/ and corpus/ beside them.
+    const src = path.join(process.cwd(), 'pipelines', 'logs');
+    fs.mkdirSync(path.join(tmp, 'pipelines', 'logs'), { recursive: true });
+    fs.copyFileSync(path.join(src, 'pipeline.json'), path.join(tmp, 'pipelines', 'logs', 'pipeline.json'));
+    fs.cpSync(path.join(src, 'goals'), path.join(tmp, 'pipelines', 'logs', 'goals'), { recursive: true });
     const org = new Organism({ rootDir: tmp, pipeline: 'logs', autonomous: false });
     try {
       const s = org.state();

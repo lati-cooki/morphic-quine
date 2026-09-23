@@ -238,3 +238,34 @@ describe('Organism red team', () => {
     expect(org.state().phase).toBe('idle');
   });
 });
+
+describe('Organism goal splice policy', () => {
+  it('does not auto-splice a goal candidate whose holdout fails to improve on the live score', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'morphic-'));
+    // A fix that satisfies only the house format examples: same holdout as the shipped code on the shipped goal? No —
+    // use the region goal: a candidate that emits region for string payloads but never truncates scores < target and,
+    // once spliced, a second identical candidate must be held rather than spliced again.
+    const provider = scripted('same', () => `function asyncBuffer(input) {
+  const text = typeof input.payload === 'string' ? input.payload : null;
+  const region = text === null ? 'UNKNOWN' : text.split(':')[0].toUpperCase();
+  return { packetId: input.id, cacheKey: input.cacheKey, evictionBucket: input.evictionBucket, dim: input.dim, region, latencyMs: performance.now() - input.ingestedAt, status: 'COMMITTED' };
+}`);
+    // Low threshold so the composite score clears and the goal rule alone decides.
+    org = new Organism({ rootDir: dir, goalsDir: path.join(process.cwd(), 'goals'), autonomous: false, provider, attackRounds: 0, spliceThreshold: 60 });
+    await org.synthesize(undefined, 'region-tag');
+    const first = org.state().candidate!.fitness.goal!.holdout;
+    expect(first).toBeGreaterThan(0);
+    org.splice('user');
+    org['phase'] = 'idle';
+    // Same candidate again, now judged by the autonomous loop.
+    await org.synthesize(undefined, 'region-tag');
+    expect(org.state().phase).toBe('candidate_ready');
+    org.setAutonomous(true);
+    await (org as any).tick();
+    const s = org.state();
+    expect(s.phase).toBe('idle');
+    expect(s.generation).toBe(1);
+    expect(s.logs.some((l) => /does not improve on the live/.test(l.message))).toBe(true);
+    expect(org['goalFeedback'].get('region-tag')).toMatch(/did not generalise/);
+  });
+});

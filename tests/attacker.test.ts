@@ -92,3 +92,17 @@ describe('CompositeAttacker', () => {
     await expect(a.generate(req)).rejects.toThrow(/a: x/);
   });
 });
+
+import { withTimeout } from '../server/attacker';
+
+describe('withTimeout', () => {
+  it('rejects a hung call and lets the composite continue with the other parts', async () => {
+    await expect(withTimeout(new Promise(() => {}), 20, 'hung')).rejects.toThrow(/hung timed out/);
+    const { req } = await setup();
+    const hung = { name: 'llm', model: 'x', generate: () => new Promise<unknown[]>(() => {}) };
+    const a = new CompositeAttacker([new FuzzAttacker(), hung], 30);
+    const out = await a.generate({ ...req, max: 10 });
+    expect(out.length).toBeGreaterThan(0);
+    expect((out as any).warnings[0]).toMatch(/llm attacker timed out/);
+  });
+});
