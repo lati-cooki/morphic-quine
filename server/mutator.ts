@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
+import vm from 'node:vm';
 import { extractFunctionSource } from './sandbox';
+import type { AttackRequest, Attacker } from './attacker';
 
 export interface PatchRequest {
   node: { id: string; name: string; role: string; source: string };
@@ -30,6 +32,49 @@ export interface Provider {
   readonly model: string;
   available(): boolean;
   synthesize(req: PatchRequest): Promise<PatchResult>;
+  /** Optional red team: propose inputs meant to break the function. */
+  attack?(req: AttackRequest): Promise<unknown[]>;
+}
+
+const ATTACK_SYSTEM = `You are a red team for a single JavaScript function running inside a data pipeline.
+Your job is to produce inputs that make it throw, run for more than 100 milliseconds, return something other than an object, or return an object its downstream consumers cannot handle.
+
+Rules:
+- Stay within the shape of the sample inputs: same top-level keys, hostile values. Only when told the node is first in the pipeline may you replace the whole input.
+- Prefer inputs that expose a general weakness (type confusion, missing guards, unbounded work) over random noise.
+- Do not repeat the known hits.
+- Reply with a JSON array of inputs and nothing else. No fences, no commentary.`;
+
+export function buildAttackPrompt(req: AttackRequest): string {
+  const parts = [
+    `# Target: ${req.node.name} (${req.node.id})${req.node.depth === 0 ? ' — first node, receives raw external packets; whole-input replacement allowed' : ''}\nRole: ${req.node.role}\n\n\`\`\`js\n${req.node.source}\n\`\`\``,
+    `# Sample inputs it receives\n${req.samples.slice(0, 6).map((s, i) => `${i + 1}. ${preview(s, 400)}`).join('\n')}`,
+  ];
+  if (req.downstream.length) parts.push(`# Downstream consumers of its output\n${req.downstream.map((d) => `\`\`\`js\n${d.source}\n\`\`\``).join('\n')}`);
+  if (req.known.length) parts.push(`# Known hits (do not repeat)\n${req.known.slice(0, 10).map((k) => `- ${preview(k, 200)}`).join('\n')}`);
+  parts.push(`Return up to ${req.max} inputs as a JSON array.`);
+  return parts.join('\n\n');
+}
+
+export function parseAttackList(text: string, max: number): unknown[] {
+  const cleaned = text.replace(/```(?:json|js|javascript)?/gi, '').replace(/```/g, '').trim();
+  const start = cleaned.indexOf('[');
+  const end = cleaned.lastIndexOf(']');
+  if (start === -1 || end === -1 || end <= start) throw new Error('No JSON array in attacker output');
+  const slice = cleaned.slice(start, end + 1);
+  let arr: unknown;
+  try {
+    arr = JSON.parse(slice);
+  } catch {
+    // Models often write JS literals (undefined, NaN, unquoted keys, trailing commas). Evaluate in an empty context.
+    try { arr = vm.runInNewContext(`(${slice})`, Object.create(null), { timeout: 200 }); }
+    catch (err) {
+      const snippet = cleaned.length > 240 ? `${cleaned.slice(0, 120)} … ${cleaned.slice(-120)}` : cleaned;
+      throw new Error(`Attacker output is not parseable: ${(err as Error).message}. Output: ${snippet.replace(/\s+/g, ' ')}`);
+    }
+  }
+  if (!Array.isArray(arr)) throw new Error('Attacker output is not an array');
+  return arr.slice(0, max);
 }
 
 const SYSTEM = `You repair a single JavaScript function that runs inside a hot-swappable data pipeline.
@@ -95,6 +140,18 @@ export class AnthropicProvider implements Provider {
     if (!source) throw new Error('No function found in model output');
     return { source, provider: this.name, model: this.model, prompt };
   }
+
+  async attack(req: AttackRequest): Promise<unknown[]> {
+    if (!this.client) this.client = new Anthropic();
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 16000,
+      system: ATTACK_SYSTEM,
+      messages: [{ role: 'user', content: buildAttackPrompt(req) }],
+    });
+    if (response.stop_reason === 'refusal') throw new Error('Model declined the attack request');
+    return parseAttackList(response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), req.max);
+  }
 }
 
 export class GeminiProvider implements Provider {
@@ -118,6 +175,20 @@ export class GeminiProvider implements Provider {
     if (!source) throw new Error('No function found in model output');
     return { source, provider: this.name, model: this.model, prompt };
   }
+
+  async attack(req: AttackRequest): Promise<unknown[]> {
+    if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const response = await this.client.models.generateContent({ model: this.model, contents: `${ATTACK_SYSTEM}\n\n${buildAttackPrompt(req)}` });
+    return parseAttackList(response.text ?? '', req.max);
+  }
+}
+
+/** Adapter so an LLM provider can serve as the attacker. */
+export class ProviderAttacker implements Attacker {
+  constructor(private provider: Provider) {}
+  get name() { return this.provider.name; }
+  get model() { return this.provider.model; }
+  generate(req: AttackRequest) { return this.provider.attack!(req); }
 }
 
 /**

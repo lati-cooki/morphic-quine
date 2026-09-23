@@ -45,7 +45,10 @@ traffic ──▶ pipeline ──▶ per-node window stats
                      evaluate in a fresh vm context on the node's recorded corpus
                         pass rate · output contract · downstream acceptance · p99
                               │
-                  fitness ≥ 85 ──▶ splice (atomic pointer swap) ──▶ lineage/gen-NNNN.json
+                  fitness ≥ 85 ──▶ red team attacks the candidate
+                              │        hits ──▶ corpus/<node>.json ──▶ back to synthesize
+                              │
+                    survived ──▶ splice (atomic pointer swap) ──▶ lineage/gen-NNNN.json
                               │
                      observe 25 executions ──▶ regression? ──▶ rollback
 ```
@@ -54,6 +57,28 @@ Fitness is measured, not asserted: 55% pass rate, 30% contract (every key the in
 must be present and every downstream node must accept the output), 15% latency against a 5 ms p99
 budget. A candidate that scores below the threshold gets one retry with the evaluator's findings in
 the prompt. Anything below threshold stays a candidate for manual splice.
+
+## Red team
+
+Fitness on recorded traffic proves a candidate handles what happened. The red team asks what could
+happen. After a candidate clears the fitness threshold, an attacker is given the function, the
+shape of inputs it receives, and its downstream consumers, and asked for inputs that will make it
+throw, time out, return a non-object, or emit something downstream rejects. Hits go into the node's
+permanent corpus (`corpus/<node>.json`) and the candidate goes back to the mutator with them in the
+prompt. A candidate ships only after a round where the attacker comes up empty, or the attempt budget
+runs out. Every later candidate for that node must survive everything that ever broke an ancestor.
+
+If the red team itself fails (network, unparseable output) the candidate is kept and marked
+unhardened rather than thrown away.
+
+Two attackers ship. `fuzz` is a deterministic structural mutator (wrong types, empties, extremes,
+oversized strings and arrays) that stays inside the observed input shape; only the first node gets
+whole-input replacements, because only it sees raw packets. When the patch provider is an LLM it is
+also the attacker unless `ATTACKER=fuzz`. `ATTACK_ROUNDS` is not exposed yet; edit `attackRounds` in
+the Organism options.
+
+**Probe** in a node's detail modal attacks the live code of a healthy node. Hits are recorded as
+failures, so the sentinel breaches on a discovered defect the same way it does on an observed one.
 
 ## Goals
 
@@ -78,7 +103,8 @@ held out deterministically and never appear in the prompt. The sentinel treats h
 Fitness for a goal-directed candidate is 25% pass, 15% contract, 10% latency, 50% goal holdout, so a
 candidate that hardcodes the shown examples scores high on train and low on holdout and stays below
 the splice threshold. The log calls that out. If goal examples fail upstream of the target node, the
-log says which node is blocking and that it has to be repaired first.
+log says which node is blocking. When every remaining miss is a throw in one upstream node, the
+autonomous loop repairs that node instead of rewriting the target again.
 
 The shipped goal is unmet on the original pipeline. The built-in reference provider declines goal
 work, so this path needs an API key.
@@ -107,7 +133,7 @@ POST /api/splice           POST /api/rollback          POST /api/snapshot
 ## Tests
 
 ```
-npm test        # vitest: sandbox, diff, pipeline, evaluator, sentinel, goals, full loop
+npm test        # vitest: sandbox, diff, pipeline, evaluator, sentinel, goals, attacker, full loop
 npm run lint    # tsc --noEmit
 ```
 
@@ -119,9 +145,10 @@ server/
   nodes.ts       default node sources and traffic generators
   pipeline.ts    topo-ordered execution, per-node window stats and traffic ring buffers, splice/rollback
   evaluator.ts   fitness measurement on recorded traffic, plus goal holdout when a goal is active
+  attacker.ts    red team: fuzz attacker, attack runner
   goals.ts       goal files, deterministic train/holdout split, scorers
   sentinel.ts    breach detection, post-splice observation
-  mutator.ts     patch providers: anthropic, gemini, reference
+  mutator.ts     patch providers: anthropic, gemini, reference; LLM attackers
   diff.ts        LCS line diff
   lineage.ts     append-only splice history, snapshot export
   telemetry.ts   process vitals
@@ -129,5 +156,6 @@ server/
   server.ts      express + websocket
 src/             React HUD
 goals/           goal definitions
+corpus/          attacker-discovered inputs per node (generated)
 tests/           vitest
 ```

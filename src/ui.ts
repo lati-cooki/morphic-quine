@@ -8,6 +8,7 @@ export const healthColor: Record<NodeHealth, { text: string; border: string; dot
 
 export const phaseLabel: Record<Phase, string> = {
   idle: 'IDLE',
+  probing: 'RED TEAM PROBING',
   synthesizing: 'SYNTHESIZING PATCH',
   candidate_ready: 'CANDIDATE READY',
   observing: 'OBSERVING SPLICE',
@@ -15,6 +16,7 @@ export const phaseLabel: Record<Phase, string> = {
 
 export const phaseTone: Record<Phase, string> = {
   idle: 'bg-slate-800/70 border-slate-600 text-slate-300',
+  probing: 'bg-rose-500/10 border-rose-500/50 text-rose-200 animate-pulse',
   synthesizing: 'bg-purple-500/10 border-purple-500/50 text-purple-200 animate-pulse',
   candidate_ready: 'bg-emerald-500/10 border-emerald-500/50 text-emerald-200',
   observing: 'bg-cyan-500/10 border-cyan-500/50 text-cyan-200',
@@ -29,6 +31,7 @@ export const levelTone: Record<LogLevel, string> = {
   SPLICE: 'bg-emerald-950 text-emerald-300 border-emerald-800/60',
   ROLLBACK: 'bg-orange-950 text-orange-300 border-orange-800/60',
   GOAL: 'bg-teal-950 text-teal-300 border-teal-800/60',
+  ATTACK: 'bg-red-950 text-red-300 border-red-800/60',
 };
 
 export const fmtMs = (n: number) => (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2)) + ' ms';

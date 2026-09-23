@@ -4,6 +4,7 @@ export type NodeHealth = 'healthy' | 'degraded' | 'faulted';
 
 export type Phase =
   | 'idle'
+  | 'probing'
   | 'synthesizing'
   | 'candidate_ready'
   | 'observing';
@@ -27,6 +28,8 @@ export interface NodeView {
   lastError?: string;
   recordedInputs: number;
   recordedFailures: number;
+  /** Attacker-discovered inputs this node's code must survive. */
+  adversarialInputs: number;
 }
 
 export interface EdgeView {
@@ -82,6 +85,8 @@ export interface CandidateView {
   fitness: FitnessReport;
   diff: DiffLine[];
   createdAt: string;
+  /** Red-team result for this candidate. */
+  hardening?: { attacker: string; rounds: number; tried: number; hits: number; survived: boolean; sample: Array<{ input: string; error: string }>; error?: string };
 }
 
 export interface GoalView {
@@ -112,7 +117,7 @@ export interface Vitals {
   uptimeSec: number;
 }
 
-export type LogLevel = 'INFO' | 'FAULT' | 'SENTINEL' | 'SYNTH' | 'EVAL' | 'SPLICE' | 'ROLLBACK' | 'GOAL';
+export type LogLevel = 'INFO' | 'FAULT' | 'SENTINEL' | 'SYNTH' | 'EVAL' | 'SPLICE' | 'ROLLBACK' | 'GOAL' | 'ATTACK';
 
 export interface EventLog {
   id: string;
@@ -154,12 +159,14 @@ export interface OrganismState {
   goals: GoalView[];
   activeGoal: string | null;
   provider: { active: string; model: string; available: string[] };
+  attacker: { name: string; model: string };
   canRollback: boolean;
 }
 
 export type WsClientMessage =
   | { type: 'INJECT'; kind: 'MALFORMED' | 'SURGE' | 'NORMAL'; count?: number }
   | { type: 'SYNTHESIZE'; nodeId?: string; goal?: string }
+  | { type: 'PROBE'; nodeId: string }
   | { type: 'SPLICE' }
   | { type: 'DISCARD' }
   | { type: 'ROLLBACK' }

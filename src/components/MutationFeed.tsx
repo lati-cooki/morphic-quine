@@ -41,7 +41,7 @@ export function MutationFeed({ state, onSplice, onDiscard, onSynthesizeGoal }: P
           <Brain className="w-4 h-4 text-purple-400" />
           <h2 className="text-xs font-bold font-mono tracking-widest uppercase text-purple-300">Mutation</h2>
         </div>
-        <span className="text-[10px] font-mono text-slate-500">threshold {state.spliceThreshold}</span>
+        <span className="text-[10px] font-mono text-slate-500">threshold {state.spliceThreshold} · red team {state.attacker.name}</span>
       </div>
 
       <div className="flex rounded-lg bg-slate-950/80 p-1 border border-slate-800/80 mb-3 font-mono text-xs">
@@ -114,6 +114,15 @@ export function MutationFeed({ state, onSplice, onDiscard, onSynthesizeGoal }: P
                 <div className="flex justify-between pt-1 border-t border-slate-800"><span className="text-slate-500">speedup at p99</span><span className="text-emerald-300 font-bold">{cand.fitness.speedup}×</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">latency score</span><span className="text-slate-300">{cand.fitness.latencyScore}</span></div>
               </div>
+              {cand.hardening && (
+                <div className={`p-2.5 rounded-lg border space-y-1 ${cand.hardening.survived ? 'bg-emerald-950/20 border-emerald-800/50' : 'bg-red-950/30 border-red-800/50'}`}>
+                  <div className="flex justify-between"><span className={`font-bold ${cand.hardening.survived ? 'text-emerald-300' : 'text-red-300'}`}>red team · {cand.hardening.attacker}</span><span className="text-slate-400">{cand.hardening.rounds} round{cand.hardening.rounds === 1 ? '' : 's'}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">inputs tried</span><span className="text-slate-300">{cand.hardening.tried}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">hits</span><span className={cand.hardening.hits ? 'text-red-300 font-bold' : cand.hardening.error ? 'text-amber-300' : 'text-emerald-300 font-bold'}>{cand.hardening.error ? 'not run' : cand.hardening.hits}{cand.hardening.survived ? ' · survived' : ''}</span></div>
+                  {cand.hardening.error && <div className="text-[10px] text-amber-200/80 pt-1 border-t border-red-900/40">{cand.hardening.error}</div>}
+                  {cand.hardening.sample.map((h, i) => <div key={i} className="text-[10px] text-red-200/80 pt-1 border-t border-red-900/40"><span className="text-slate-500">{h.input}</span> → {h.error}</div>)}
+                </div>
+              )}
               {cand.fitness.goal && (
                 <div className="p-2.5 rounded-lg bg-teal-950/30 border border-teal-800/50 space-y-1">
                   <div className="flex justify-between"><span className="text-teal-300 font-bold">goal · {cand.fitness.goal.name}</span><span className="text-slate-400">target {cand.fitness.goal.target}</span></div>

@@ -28,6 +28,7 @@ app.post('/api/inject/:kind', (req, res) => {
   res.json({ ok: true });
 });
 app.post('/api/synthesize', async (req, res) => { await organism.synthesize(req.body?.nodeId, req.body?.goal); res.json(organism.state().candidate); });
+app.post('/api/probe/:nodeId', async (req, res) => { await organism.probe(String(req.params.nodeId)); res.json(organism.state().nodes.find((n) => n.id === req.params.nodeId)); });
 app.get('/api/goals', (_req, res) => res.json(organism.state().goals));
 app.post('/api/splice', (_req, res) => { organism.splice('user'); res.json({ phase: organism.state().phase }); });
 app.post('/api/rollback', (_req, res) => { organism.rollback('user'); res.json({ phase: organism.state().phase }); });
@@ -59,6 +60,7 @@ wss.on('connection', (ws) => {
       switch (msg.type) {
         case 'INJECT': organism.inject(msg.kind, msg.count ?? 1); break;
         case 'SYNTHESIZE': await organism.synthesize(msg.nodeId, msg.goal); break;
+        case 'PROBE': await organism.probe(msg.nodeId); break;
         case 'SPLICE': organism.splice('user'); break;
         case 'DISCARD': organism.discard(); break;
         case 'ROLLBACK': organism.rollback('user'); break;

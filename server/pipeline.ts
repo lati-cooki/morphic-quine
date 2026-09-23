@@ -50,6 +50,8 @@ export class RuntimeNode {
   private traffic = new Ring<TrafficSample>(60);
   private failures = new Ring<TrafficSample>(20);
   private slow = new Ring<TrafficSample>(10);
+  /** Inputs discovered by the attacker. Persistent; every future candidate must survive them. */
+  adversarial: unknown[] = [];
 
   constructor(public spec: NodeSpec, timeoutMs: number) {
     this.fn = compileFunction(spec.source, { timeoutMs });
@@ -100,7 +102,20 @@ export class RuntimeNode {
     this.failures.values().forEach(add);
     this.slow.values().forEach(add);
     this.traffic.values().forEach(add);
+    for (const a of this.adversarial) { const k = safeKey(a); if (!seen.has(k)) { seen.add(k); out.push(a); } }
     return out;
+  }
+
+  addAdversarial(inputs: unknown[]): number {
+    const have = new Set(this.adversarial.map(safeKey));
+    let n = 0;
+    for (const i of inputs) { const k = safeKey(i); if (!have.has(k)) { have.add(k); this.adversarial.push(i); n++; } }
+    return n;
+  }
+
+  /** Recent successful inputs, for the attacker to learn the shape from. */
+  sampleInputs(max = 8): unknown[] {
+    return this.traffic.values().filter((t) => t.ok).slice(-max).map((t) => t.input);
   }
 
   recentFailures(): TrafficSample[] { return this.failures.values(); }
@@ -111,7 +126,7 @@ export class RuntimeNode {
 }
 
 function safeKey(v: unknown): string {
-  try { return JSON.stringify(v)?.slice(0, 400) ?? 'undefined'; } catch { return String(v); }
+  try { return JSON.stringify(v, (_k, val) => (typeof val === 'number' && Number.isNaN(val) ? '__NaN__' : val))?.slice(0, 400) ?? 'undefined'; } catch { return String(v); }
 }
 
 export interface ExecutionResult {
@@ -197,8 +212,10 @@ export class Pipeline {
       const fn = overrides.get(id) ?? this.nodes.get(id)!.fn;
       try { current = fn.call(current); }
       catch (err) {
-        const e = new Error(`${id}: ${err instanceof Error ? err.message : String(err)}`) as Error & { nodeId: string };
+        const e = new Error(`${id}: ${err instanceof Error ? err.message : String(err)}`) as Error & { nodeId: string; nodeInputs: Map<string, unknown>; cause: unknown };
         e.nodeId = id;
+        e.nodeInputs = nodeInputs;
+        e.cause = err;
         throw e;
       }
     }

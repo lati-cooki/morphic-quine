@@ -123,6 +123,7 @@ export function LivingGraph({ state, selectedNodeId, onSelectNode, onSplice }: P
                   <Row k="p95" v={fmtMs(n.p95)} warn={n.p95 > 25} />
                   <Row k="errors" v={fmtPct(n.windowErrorRate)} warn={n.windowErrorRate > 0} />
                   <Row k="runs" v={String(n.executions)} />
+                  {n.adversarialInputs > 0 && <Row k="adversarial" v={String(n.adversarialInputs)} />}
                 </div>
               </div>
             </div>

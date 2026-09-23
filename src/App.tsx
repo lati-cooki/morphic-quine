@@ -52,7 +52,7 @@ export default function App() {
 
       <LineageBar state={state} onExport={engine.exportSnapshot} />
 
-      <NodeDetailModal node={selectedNode} state={state} onClose={() => setSelectedNodeId(null)} onSynthesize={(id) => { engine.synthesize(id); setSelectedNodeId(null); }} />
+      <NodeDetailModal node={selectedNode} state={state} onClose={() => setSelectedNodeId(null)} onSynthesize={(id) => { engine.synthesize(id); setSelectedNodeId(null); }} onProbe={(id) => { engine.probe(id); setSelectedNodeId(null); }} />
       <SnapshotModal snapshot={engine.snapshot} onClose={engine.clearSnapshot} />
     </div>
   );

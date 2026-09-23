@@ -1,10 +1,10 @@
-import { X, Sparkles } from 'lucide-react';
+import { X, Sparkles, Crosshair } from 'lucide-react';
 import type { NodeView, OrganismState } from '../types';
 import { healthColor, fmtMs, fmtPct } from '../ui';
 
-interface Props { node: NodeView | null; state: OrganismState; onClose: () => void; onSynthesize: (id: string) => void }
+interface Props { node: NodeView | null; state: OrganismState; onClose: () => void; onSynthesize: (id: string) => void; onProbe: (id: string) => void }
 
-export function NodeDetailModal({ node, state, onClose, onSynthesize }: Props) {
+export function NodeDetailModal({ node, state, onClose, onSynthesize, onProbe }: Props) {
   if (!node) return null;
   const c = healthColor[node.health];
   return (
@@ -26,7 +26,7 @@ export function NodeDetailModal({ node, state, onClose, onSynthesize }: Props) {
           <Stat l="p50 / p95" v={`${fmtMs(node.p50)} / ${fmtMs(node.p95)}`} />
           <Stat l="window errors" v={fmtPct(node.windowErrorRate)} tone={node.windowErrorRate > 0 ? 'text-rose-300' : undefined} />
           <Stat l="lifetime" v={`${node.executions} runs · ${node.errors} err`} />
-          <Stat l="recorded" v={`${node.recordedInputs} inputs · ${node.recordedFailures} fail`} />
+          <Stat l="recorded" v={`${node.recordedInputs} inputs · ${node.recordedFailures} fail · ${node.adversarialInputs} adversarial`} />
         </div>
 
         {node.lastError && <div className="mb-3 p-2.5 rounded-lg bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs break-all">{node.lastError}</div>}
@@ -36,10 +36,15 @@ export function NodeDetailModal({ node, state, onClose, onSynthesize }: Props) {
         </div>
 
         <div className="flex items-center justify-between gap-2 pt-3 mt-3 border-t border-slate-800 text-xs">
-          <span className="text-slate-500">recorded inputs become the verification corpus for any candidate</span>
-          <button onClick={() => onSynthesize(node.id)} disabled={state.phase !== 'idle'} className="px-3 py-1.5 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 border border-purple-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
-            <Sparkles className="w-3.5 h-3.5" /> synthesize patch for this node
+          <span className="text-slate-500">recorded and adversarial inputs form the verification corpus</span>
+          <div className="flex items-center gap-2">
+          <button onClick={() => onProbe(node.id)} disabled={state.phase !== 'idle'} className="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border border-rose-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" title={`Ask ${state.attacker.name} to find inputs that break this node's live code`}>
+            <Crosshair className="w-3.5 h-3.5" /> probe with {state.attacker.name}
           </button>
+          <button onClick={() => onSynthesize(node.id)} disabled={state.phase !== 'idle'} className="px-3 py-1.5 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 border border-purple-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
+            <Sparkles className="w-3.5 h-3.5" /> synthesize patch
+          </button>
+          </div>
         </div>
       </div>
     </div>

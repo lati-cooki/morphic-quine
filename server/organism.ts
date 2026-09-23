@@ -5,8 +5,11 @@ import { DEFAULT_EDGES, DEFAULT_NODES, packets } from './nodes';
 import { Telemetry } from './telemetry';
 import { Sentinel, DEFAULT_SENTINEL } from './sentinel';
 import { Lineage, exportSnapshot } from './lineage';
-import { selectProvider, type Provider } from './mutator';
+import { selectProvider, ProviderAttacker, type Provider } from './mutator';
+import { FuzzAttacker, runAttacks, previewInput, type Attacker, type AttackHit } from './attacker';
+import fs from 'node:fs';
 import { compileFunction, type CompiledFn } from './sandbox';
+import { performance } from 'node:perf_hooks';
 import { evaluateCandidate } from './evaluator';
 import { diffLines } from './diff';
 import { loadGoals, scoreGoal, scoreOutput, splitOf, type Goal, type GoalScore } from './goals';
@@ -31,6 +34,12 @@ export interface OrganismOptions {
   goalsDir?: string;
   /** Seconds between goal-driven synthesis attempts for the same goal. */
   goalCooldownMs?: number;
+  /** Override the red team (tests). */
+  attacker?: Attacker;
+  /** Red-team rounds per candidate. 0 disables hardening. */
+  attackRounds?: number;
+  /** Adversarial inputs requested per round. */
+  attackBatch?: number;
 }
 
 /**
@@ -54,7 +63,9 @@ export class Organism extends EventEmitter {
   private maxAttempts: number;
   private timers: NodeJS.Timeout[] = [];
   private started = Date.now();
-  private opts: Required<Omit<OrganismOptions, 'provider' | 'goalsDir'>> & { goalsDir: string };
+  private opts: Required<Omit<OrganismOptions, 'provider' | 'goalsDir' | 'attacker'>> & { goalsDir: string };
+  private attacker: Attacker;
+  private corpusDir: string;
   private goals: Goal[] = [];
   private goalScores = new Map<string, GoalScore>();
   private goalLastTry = new Map<string, number>();
@@ -67,22 +78,27 @@ export class Organism extends EventEmitter {
       tickIntervalMs: 1000,
       spliceThreshold: 85,
       autonomous: true,
-      maxAttempts: 2,
+      maxAttempts: 3,
       goalCooldownMs: 30_000,
+      attackRounds: 2,
+      attackBatch: 32,
       goalsDir: opts.goalsDir ?? path.join(opts.rootDir, 'goals'),
       ...opts,
     };
+    this.corpusDir = path.join(opts.rootDir, 'corpus');
     this.lineage = new Lineage(path.join(opts.rootDir, 'lineage'));
     const sel = selectProvider();
     this.provider = opts.provider ?? sel.active;
     this.providersAvailable = opts.provider ? [opts.provider.name] : sel.available;
+    this.attacker = opts.attacker ?? (process.env.ATTACKER !== 'fuzz' && this.provider.attack ? new ProviderAttacker(this.provider) : new FuzzAttacker());
+    this.loadAdversarialCorpus();
     try { this.goals = loadGoals(this.opts.goalsDir); } catch (err) { this.log('GOAL', `Could not load goals: ${(err as Error).message}`); }
     this.autonomous = this.opts.autonomous;
     this.spliceThreshold = this.opts.spliceThreshold;
     this.maxAttempts = this.opts.maxAttempts;
     const replayed = this.replayLineage();
     this.log('INFO', `Engine up. ${this.pipeline.order.length} nodes compiled in isolated contexts. Lineage generation ${this.lineage.generation}${replayed ? `, ${replayed} splice${replayed === 1 ? '' : 's'} replayed from disk` : ''}.`);
-    this.log('INFO', `Patch provider: ${this.provider.name} (${this.provider.model}). Available: ${this.providersAvailable.join(', ')}.`);
+    this.log('INFO', `Patch provider: ${this.provider.name} (${this.provider.model}). Available: ${this.providersAvailable.join(', ')}. Red team: ${this.attacker.name} (${this.attacker.model}), ${this.opts.attackRounds} round${this.opts.attackRounds === 1 ? '' : 's'} per candidate.`);
     if (this.goals.length) {
       this.rescoreGoals();
       for (const g of this.goals) {
@@ -96,7 +112,108 @@ export class Organism extends EventEmitter {
     for (const g of this.goals) this.goalScores.set(g.name, scoreGoal(g, (input) => this.pipeline.dryRun(input).output));
   }
 
+  /**
+   * Replay the goal examples that die in `blocker` and record each as a failure on that node, so the
+   * repair prompt and the verification corpus both contain the inputs that actually matter.
+   */
+  private feedGoalFailuresTo(g: Goal, blocker: string): number {
+    const node = this.pipeline.nodes.get(blocker)!;
+    let n = 0;
+    for (const ex of g.examples) {
+      try { this.pipeline.dryRun(ex.input); }
+      catch (err) {
+        const e = err as { nodeId?: string; nodeInputs?: Map<string, unknown>; cause?: unknown };
+        if (e.nodeId !== blocker || !e.nodeInputs) continue;
+        const cause = e.cause instanceof Error ? `${e.cause.name}: ${e.cause.message}` : String(e.cause);
+        node.record({ input: e.nodeInputs.get(blocker), ok: false, error: `goal "${g.name}" example: ${cause}`, latencyMs: 0, ts: performance.now() }, DEFAULT_SENTINEL.p95ThresholdMs);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** If every current miss on a goal is a throw in one node upstream of the target, that node is the real problem. */
+  private upstreamBlocker(g: Goal): string | null {
+    const sc = this.goalScores.get(g.name);
+    if (!sc || sc.misses.length === 0) return null;
+    const target = this.goalTarget(g);
+    let blocker: string | null = null;
+    for (const m of sc.misses) {
+      const err = typeof m.actual === 'object' && m.actual !== null && 'error' in (m.actual as object) ? String((m.actual as { error: unknown }).error) : null;
+      const id = err ? this.pipeline.order.find((nid) => err.startsWith(`${nid}: `)) ?? null : null;
+      if (!id || id === target) return null;
+      if (blocker && blocker !== id) return null;
+      blocker = id;
+    }
+    return blocker;
+  }
+
   private goalTarget(g: Goal): string { return g.nodeId ?? this.pipeline.order[this.pipeline.order.length - 1]; }
+
+  private loadAdversarialCorpus() {
+    if (!fs.existsSync(this.corpusDir)) return;
+    let total = 0;
+    for (const [id, node] of this.pipeline.nodes) {
+      const file = path.join(this.corpusDir, `${id}.json`);
+      if (!fs.existsSync(file)) continue;
+      try { total += node.addAdversarial(JSON.parse(fs.readFileSync(file, 'utf-8'))); }
+      catch (err) { this.log('ATTACK', `Could not read adversarial corpus for ${id}: ${(err as Error).message}`); }
+    }
+    if (total) this.log('ATTACK', `Loaded ${total} adversarial input${total === 1 ? '' : 's'} from disk.`);
+  }
+
+  private saveAdversarialCorpus(nodeId: string) {
+    fs.mkdirSync(this.corpusDir, { recursive: true });
+    const node = this.pipeline.nodes.get(nodeId)!;
+    fs.writeFileSync(path.join(this.corpusDir, `${nodeId}.json`), JSON.stringify(node.adversarial, (_k, v) => (typeof v === 'number' && Number.isNaN(v) ? null : v), 2));
+  }
+
+  /**
+   * Red-team a function. Returns the hits and records them in the node's permanent corpus so
+   * every future candidate has to survive them.
+   */
+  private async attack(nodeId: string, fn: CompiledFn, label: string): Promise<{ tried: number; hits: AttackHit[] }> {
+    const node = this.pipeline.nodes.get(nodeId)!;
+    const downstream = this.pipeline.downstreamOf(nodeId);
+    const inputs = await this.attacker.generate({
+      node: { id: nodeId, name: node.spec.name, role: node.spec.role, source: fn.source, depth: this.pipeline.depthOf(nodeId) },
+      samples: node.sampleInputs(),
+      downstream: downstream.map((d) => ({ name: d.spec.name, source: d.source })),
+      known: node.adversarial.slice(-20),
+      max: this.opts.attackBatch,
+    });
+    const hits = runAttacks(fn, inputs, downstream.map((d) => d.fn));
+    if (hits.length) {
+      const added = node.addAdversarial(hits.map((h) => h.input));
+      if (added) this.saveAdversarialCorpus(nodeId);
+      this.log('ATTACK', `${this.attacker.name} broke ${label} with ${hits.length}/${inputs.length} inputs. ${added} new input${added === 1 ? '' : 's'} added to ${node.spec.name}'s permanent corpus (${node.adversarial.length} total).`,
+        hits.slice(0, 3).map((h) => `${previewInput(h.input, 90)} → ${h.error}`).join('\n'));
+    } else {
+      this.log('ATTACK', `${this.attacker.name} tried ${inputs.length} inputs against ${label}; none landed.`);
+    }
+    return { tried: inputs.length, hits };
+  }
+
+  /** Attack the live code of a healthy node. Hits are recorded as failures so the sentinel treats them like observed ones. */
+  async probe(nodeId: string): Promise<void> {
+    if (this.phase !== 'idle') return;
+    const node = this.pipeline.nodes.get(nodeId);
+    if (!node) return;
+    this.phase = 'probing';
+    this.targetNodeId = nodeId;
+    this.log('ATTACK', `Probing ${node.spec.name} v${node.version} with ${this.attacker.name}.`);
+    this.emitState();
+    try {
+      const { hits } = await this.attack(nodeId, node.fn, `${node.spec.name} v${node.version}`);
+      for (const h of hits.slice(0, 10)) node.record({ input: h.input, ok: false, error: `discovered by ${this.attacker.name}: ${h.error}`, latencyMs: 0, ts: performance.now() }, DEFAULT_SENTINEL.p95ThresholdMs);
+      if (hits.length) this.log('SENTINEL', `${node.spec.name} marked faulted on discovered inputs; ${this.autonomous ? 'synthesis will follow.' : 'synthesize to repair.'}`);
+    } catch (err) {
+      this.log('ATTACK', `Probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.phase = 'idle';
+    this.targetNodeId = null;
+    this.emitState();
+  }
 
   /** Lineage is the source of truth for what code is live: reapply every active splice, oldest first. */
   private replayLineage(): number {
@@ -184,8 +301,15 @@ export class Organism extends EventEmitter {
         if (unmet) {
           const sc = this.goalScores.get(unmet.name)!;
           this.goalLastTry.set(unmet.name, now);
-          this.log('GOAL', `Goal "${unmet.name}" unmet: holdout ${sc.holdout} < target ${unmet.target}. Synthesizing toward it on ${this.goalTarget(unmet)}.`);
-          void this.synthesize(this.goalTarget(unmet), unmet.name);
+          const blocker = this.upstreamBlocker(unmet);
+          if (blocker) {
+            const fed = this.feedGoalFailuresTo(unmet, blocker);
+            this.log('GOAL', `Goal "${unmet.name}" unmet: holdout ${sc.holdout} < target ${unmet.target}. Every remaining miss fails upstream in ${this.pipeline.nodes.get(blocker)!.spec.name}; repairing that node instead of rewriting ${this.goalTarget(unmet)}. ${fed} failing goal input${fed === 1 ? '' : 's'} recorded against it.`);
+            void this.synthesize(blocker);
+          } else {
+            this.log('GOAL', `Goal "${unmet.name}" unmet: holdout ${sc.holdout} < target ${unmet.target}. Synthesizing toward it on ${this.goalTarget(unmet)}.`);
+            void this.synthesize(this.goalTarget(unmet), unmet.name);
+          }
         }
       }
     }
@@ -237,6 +361,7 @@ export class Organism extends EventEmitter {
 
     let feedback: string | undefined;
     let best: Candidate | null = null;
+    let attackRoundsUsed = 0;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
       try {
         const patch = await this.provider.synthesize({
@@ -275,8 +400,36 @@ export class Organism extends EventEmitter {
         this.log('EVAL', `Attempt ${attempt}: fitness ${fitness.score} on ${fitness.corpusSize} inputs. pass ${pct(fitness.passRate)}, contract ${pct(fitness.contractRate)}, p99 ${fitness.candidate.p99}ms vs ${fitness.incumbent.p99}ms (${fitness.speedup}x)${fitness.goal ? `, goal train ${fitness.goal.train} / holdout ${fitness.goal.holdout}` : ''}.`);
         if (fitness.goal && fitness.goal.train - fitness.goal.holdout > 0.25) this.log('EVAL', `Attempt ${attempt}: train/holdout gap ${(fitness.goal.train - fitness.goal.holdout).toFixed(2)}. The candidate fits the shown examples better than the hidden ones; likely hardcoded.`);
         if (!best || fitness.score > best.fitness.score) best = cand;
-        if (fitness.score >= this.spliceThreshold) break;
-        feedback = describeShortfall(cand);
+        if (fitness.score < this.spliceThreshold) { feedback = describeShortfall(cand); continue; }
+
+        // Fitness cleared. Now try to break it before it ships.
+        if (this.opts.attackRounds > 0 && attackRoundsUsed < this.opts.attackRounds) {
+          attackRoundsUsed++;
+          let tried = 0; let hits: AttackHit[] = [];
+          try { ({ tried, hits } = await this.attack(target, compiled, `candidate attempt ${attempt}`)); }
+          catch (err) {
+            // A red-team failure is not a candidate failure. Keep the candidate, say what happened.
+            this.log('ATTACK', `Red team unavailable for attempt ${attempt}: ${err instanceof Error ? err.message : String(err)}. Candidate kept unhardened.`);
+            cand.hardening = { attacker: this.attacker.name, rounds: attackRoundsUsed, tried: 0, hits: 0, survived: false, sample: [], error: err instanceof Error ? err.message : String(err) };
+            break;
+          }
+          cand.hardening = {
+            attacker: this.attacker.name, rounds: attackRoundsUsed, tried, hits: hits.length, survived: hits.length === 0,
+            sample: hits.slice(0, 5).map((h) => ({ input: previewInput(h.input), error: h.error })),
+          };
+          if (hits.length) {
+            // Re-score with the hits in the corpus so the number on the card is honest, then send it back.
+            for (const h of hits) corpus.push(h.input);
+            cand.fitness = evaluateCandidate({ candidate: compiled, incumbent: node.fn, corpus, downstream: downstream.map((d) => d.fn), goal: goal ? { goal, run: (input) => this.pipeline.dryRun(input, overrides).output } : undefined });
+            this.log('EVAL', `Attempt ${attempt} re-scored with adversarial inputs: fitness ${cand.fitness.score}.`);
+            if (cand.fitness.score > (best?.fitness.score ?? -1) || best === cand) best = cand;
+            feedback = describeShortfall(cand) + `\n\nAdversarial inputs that broke this version:\n` + hits.slice(0, 8).map((h) => `- ${previewInput(h.input, 200)} → ${h.error}`).join('\n');
+            if (attempt < this.maxAttempts) continue;
+          }
+        } else if (this.opts.attackRounds > 0) {
+          cand.hardening = { attacker: this.attacker.name, rounds: attackRoundsUsed, tried: 0, hits: 0, survived: true, sample: [] };
+        }
+        break;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.log('SYNTH', `Attempt ${attempt} failed: ${msg}`);
@@ -390,6 +543,7 @@ export class Organism extends EventEmitter {
         lastError: n.lastError,
         recordedInputs: n.recordedInputs(),
         recordedFailures: n.recentFailures().length,
+        adversarialInputs: n.adversarial.length,
       };
     });
     const edges = this.pipeline.edges.map((e) => ({
@@ -417,6 +571,7 @@ export class Organism extends EventEmitter {
       goals: this.goals.map((g) => this.goalView(g)),
       activeGoal: this.activeGoal,
       provider: { active: this.provider.name, model: this.provider.model, available: this.providersAvailable },
+      attacker: { name: this.attacker.name, model: this.attacker.model },
       canRollback: Boolean(this.lineage.latestActive()),
     };
   }
