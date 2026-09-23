@@ -1,0 +1,87 @@
+{
+  "description": "Log triage: raw line → parsed fields → severity and category → alert record. The shipped parser only understands 'LEVEL service: message'.",
+  "nodes": [
+    {
+      "id": "ingest",
+      "name": "Ingest",
+      "role": "Raw line in",
+      "source": [
+        "function ingest(packet) {",
+        "  return {",
+        "    id: (packet && packet.id) || Math.random().toString(36).slice(2, 9),",
+        "    line: packet && typeof packet.line === 'string' ? packet.line : String(packet && packet.line),",
+        "    receivedAt: performance.now()",
+        "  };",
+        "}"
+      ]
+    },
+    {
+      "id": "parse",
+      "name": "Parse",
+      "role": "Line → level, service, message",
+      "source": [
+        "function parse(input) {",
+        "  // Handles the house format only: 'LEVEL service: message'",
+        "  const m = /^([A-Z]+) ([a-z0-9_-]+): (.*)$/.exec(input.line);",
+        "  if (!m) return { ...input, level: 'UNKNOWN', service: 'unknown', message: input.line, ts: null };",
+        "  return { ...input, level: m[1], service: m[2], message: m[3], ts: null };",
+        "}"
+      ]
+    },
+    {
+      "id": "classify",
+      "name": "Classify",
+      "role": "Severity and category",
+      "source": [
+        "function classify(input) {",
+        "  const sev = { FATAL: 3, ERROR: 3, WARN: 2, WARNING: 2, INFO: 1, DEBUG: 0, TRACE: 0 };",
+        "  const severity = sev[input.level] === undefined ? 1 : sev[input.level];",
+        "  const category = 'general';",
+        "  return { ...input, severity, category };",
+        "}"
+      ]
+    },
+    {
+      "id": "emit",
+      "name": "Emit",
+      "role": "Alert record",
+      "source": [
+        "function emit(input) {",
+        "  return {",
+        "    id: input.id,",
+        "    ts: input.ts,",
+        "    level: input.level,",
+        "    service: input.service,",
+        "    severity: input.severity,",
+        "    category: input.category,",
+        "    message: input.message,",
+        "    latencyMs: performance.now() - input.receivedAt",
+        "  };",
+        "}"
+      ]
+    }
+  ],
+  "traffic": {
+    "normal": [
+      { "line": "INFO api: request served in 12ms" },
+      { "line": "WARN worker-3: retrying job 8812 after timeout" },
+      { "line": "ERROR billing: charge failed: card declined" },
+      { "line": "{\"ts\":\"2026-09-23T14:02:11Z\",\"level\":\"error\",\"service\":\"auth\",\"msg\":\"token expired for user 4412\"}" },
+      { "line": "{\"ts\":\"2026-09-23T14:02:12Z\",\"level\":\"info\",\"service\":\"api\",\"msg\":\"GET /health 200\"}" },
+      { "line": "<11>Sep 23 14:02:13 host-7 db[2211]: connection pool exhausted" },
+      { "line": "<14>Sep 23 14:02:14 host-2 cache[19]: warmed 4096 keys" },
+      { "line": "10.0.0.7 - - [23/Sep/2026:14:02:15 +0000] \"GET /api/orders HTTP/1.1\" 502 91" },
+      { "line": "10.0.0.9 - - [23/Sep/2026:14:02:16 +0000] \"POST /login HTTP/1.1\" 200 512" },
+      { "line": "DEBUG scheduler: tick" }
+    ],
+    "malformed": [
+      { "line": null },
+      { "line": 42 },
+      { },
+      { "line": "" }
+    ],
+    "surge": [
+      { "line": "INFO api: payload dump follows" }
+    ]
+  }
+}

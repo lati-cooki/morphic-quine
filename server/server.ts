@@ -10,7 +10,7 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
 const PORT = Number(process.env.ENGINE_PORT || 3001);
-const organism = new Organism({ rootDir: process.cwd() });
+const organism = new Organism({ rootDir: process.cwd(), pipeline: process.env.PIPELINE || 'default' });
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));

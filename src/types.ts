@@ -141,6 +141,7 @@ export interface LineageEntry {
 }
 
 export interface OrganismState {
+  pipeline: { name: string; description: string; available: string[] };
   generation: number;
   stateHash: string;
   uptimeSec: number;

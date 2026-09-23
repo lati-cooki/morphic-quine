@@ -1,0 +1,171 @@
+{
+  "name": "categorize",
+  "description": "classify sets category from the message text: 'timeout' for timeouts and deadlines, 'capacity' for memory, disk, and pool exhaustion, 'auth' for authentication and permission problems, 'payment' for charges, cards, and refunds, otherwise 'general'. Match on meaning, not only the literal words in these examples.",
+  "nodeId": "classify",
+  "target": 0.9,
+  "scorer": "fields",
+  "examples": [
+    {
+      "input": {
+        "id": "c0",
+        "line": "INFO svc: timeout"
+      },
+      "expected": {
+        "category": "timeout"
+      }
+    },
+    {
+      "input": {
+        "id": "c1",
+        "line": "INFO svc: retrying job 8812 after timeout"
+      },
+      "expected": {
+        "category": "timeout"
+      }
+    },
+    {
+      "input": {
+        "id": "c2",
+        "line": "INFO svc: connection pool exhausted"
+      },
+      "expected": {
+        "category": "capacity"
+      }
+    },
+    {
+      "input": {
+        "id": "c3",
+        "line": "INFO svc: pool exhausted"
+      },
+      "expected": {
+        "category": "capacity"
+      }
+    },
+    {
+      "input": {
+        "id": "c4",
+        "line": "INFO svc: out of memory"
+      },
+      "expected": {
+        "category": "capacity"
+      }
+    },
+    {
+      "input": {
+        "id": "c5",
+        "line": "INFO svc: OOM killed worker"
+      },
+      "expected": {
+        "category": "capacity"
+      }
+    },
+    {
+      "input": {
+        "id": "c6",
+        "line": "INFO svc: token expired for user 4412"
+      },
+      "expected": {
+        "category": "auth"
+      }
+    },
+    {
+      "input": {
+        "id": "c7",
+        "line": "INFO svc: card declined"
+      },
+      "expected": {
+        "category": "payment"
+      }
+    },
+    {
+      "input": {
+        "id": "c8",
+        "line": "INFO svc: charge failed: card declined"
+      },
+      "expected": {
+        "category": "payment"
+      }
+    },
+    {
+      "input": {
+        "id": "c9",
+        "line": "INFO svc: 401 unauthorized"
+      },
+      "expected": {
+        "category": "auth"
+      }
+    },
+    {
+      "input": {
+        "id": "c10",
+        "line": "INFO svc: disk 97% full"
+      },
+      "expected": {
+        "category": "capacity"
+      }
+    },
+    {
+      "input": {
+        "id": "c11",
+        "line": "INFO svc: GET /health 200"
+      },
+      "expected": {
+        "category": "general"
+      }
+    },
+    {
+      "input": {
+        "id": "c12",
+        "line": "INFO svc: warmed 4096 keys"
+      },
+      "expected": {
+        "category": "general"
+      }
+    },
+    {
+      "input": {
+        "id": "c13",
+        "line": "INFO svc: request served in 12ms"
+      },
+      "expected": {
+        "category": "general"
+      }
+    },
+    {
+      "input": {
+        "id": "c14",
+        "line": "INFO svc: permission denied"
+      },
+      "expected": {
+        "category": "auth"
+      }
+    },
+    {
+      "input": {
+        "id": "c15",
+        "line": "INFO svc: deadline exceeded calling search"
+      },
+      "expected": {
+        "category": "timeout"
+      }
+    },
+    {
+      "input": {
+        "id": "c16",
+        "line": "INFO svc: refund issued"
+      },
+      "expected": {
+        "category": "payment"
+      }
+    },
+    {
+      "input": {
+        "id": "c17",
+        "line": "INFO svc: index rebuild took 14s"
+      },
+      "expected": {
+        "category": "general"
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { Pipeline, type NodeWindowStats } from './pipeline';
-import { DEFAULT_EDGES, DEFAULT_NODES, packets } from './nodes';
+import { loadPipeline, trafficFor, listPipelines, type PipelineDef } from './pipelines';
 import { Telemetry } from './telemetry';
 import { Sentinel, DEFAULT_SENTINEL } from './sentinel';
 import { Lineage, exportSnapshot } from './lineage';
@@ -23,6 +23,8 @@ interface Candidate extends CandidateView {
 
 export interface OrganismOptions {
   rootDir: string;
+  /** Pipeline name: 'default' or a directory under pipelines/. */
+  pipeline?: string;
   ambientIntervalMs?: number;
   tickIntervalMs?: number;
   spliceThreshold?: number;
@@ -47,7 +49,9 @@ export interface OrganismOptions {
  * Emits 'state' whenever something worth redrawing happened.
  */
 export class Organism extends EventEmitter {
-  readonly pipeline = new Pipeline(DEFAULT_NODES, DEFAULT_EDGES);
+  readonly def: PipelineDef;
+  readonly pipeline: Pipeline;
+  private traffic: ReturnType<typeof trafficFor>;
   readonly telemetry = new Telemetry();
   readonly sentinel = new Sentinel(DEFAULT_SENTINEL);
   readonly lineage: Lineage;
@@ -63,7 +67,7 @@ export class Organism extends EventEmitter {
   private maxAttempts: number;
   private timers: NodeJS.Timeout[] = [];
   private started = Date.now();
-  private opts: Required<Omit<OrganismOptions, 'provider' | 'goalsDir' | 'attacker'>> & { goalsDir: string };
+  private opts: Required<Omit<OrganismOptions, 'provider' | 'goalsDir' | 'attacker' | 'pipeline'>> & { goalsDir: string; pipeline: string };
   private attacker: Attacker;
   private corpusDir: string;
   private goals: Goal[] = [];
@@ -73,6 +77,9 @@ export class Organism extends EventEmitter {
 
   constructor(opts: OrganismOptions) {
     super();
+    this.def = loadPipeline(opts.rootDir, opts.pipeline ?? 'default');
+    this.pipeline = new Pipeline(this.def.nodes, this.def.edges);
+    this.traffic = trafficFor(this.def);
     this.opts = {
       ambientIntervalMs: 400,
       tickIntervalMs: 1000,
@@ -82,11 +89,12 @@ export class Organism extends EventEmitter {
       goalCooldownMs: 30_000,
       attackRounds: 2,
       attackBatch: 32,
-      goalsDir: opts.goalsDir ?? path.join(opts.rootDir, 'goals'),
+      pipeline: opts.pipeline ?? 'default',
+      goalsDir: opts.goalsDir ?? path.join(this.def.dir, 'goals'),
       ...opts,
     };
-    this.corpusDir = path.join(opts.rootDir, 'corpus');
-    this.lineage = new Lineage(path.join(opts.rootDir, 'lineage'));
+    this.corpusDir = path.join(this.def.dir, 'corpus');
+    this.lineage = new Lineage(path.join(this.def.dir, 'lineage'));
     const sel = selectProvider();
     this.provider = opts.provider ?? sel.active;
     this.providersAvailable = opts.provider ? [opts.provider.name] : sel.available;
@@ -97,7 +105,7 @@ export class Organism extends EventEmitter {
     this.spliceThreshold = this.opts.spliceThreshold;
     this.maxAttempts = this.opts.maxAttempts;
     const replayed = this.replayLineage();
-    this.log('INFO', `Engine up. ${this.pipeline.order.length} nodes compiled in isolated contexts. Lineage generation ${this.lineage.generation}${replayed ? `, ${replayed} splice${replayed === 1 ? '' : 's'} replayed from disk` : ''}.`);
+    this.log('INFO', `Engine up on pipeline "${this.def.name}": ${this.pipeline.order.length} nodes compiled in isolated contexts. Lineage generation ${this.lineage.generation}${replayed ? `, ${replayed} splice${replayed === 1 ? '' : 's'} replayed from disk` : ''}.`);
     this.log('INFO', `Patch provider: ${this.provider.name} (${this.provider.model}). Available: ${this.providersAvailable.join(', ')}. Red team: ${this.attacker.name} (${this.attacker.model}), ${this.opts.attackRounds} round${this.opts.attackRounds === 1 ? '' : 's'} per candidate.`);
     if (this.goals.length) {
       this.rescoreGoals();
@@ -238,7 +246,7 @@ export class Organism extends EventEmitter {
   // ---- traffic -------------------------------------------------------------------------
 
   private ambient() {
-    this.send(packets.normal());
+    this.send(this.traffic.normal());
   }
 
   send(packet: unknown) {
@@ -253,7 +261,7 @@ export class Organism extends EventEmitter {
   }
 
   inject(kind: 'MALFORMED' | 'SURGE' | 'NORMAL', count = 1) {
-    const gen = kind === 'MALFORMED' ? packets.malformed : kind === 'SURGE' ? packets.surge : packets.normal;
+    const gen = kind === 'MALFORMED' ? this.traffic.malformed : kind === 'SURGE' ? this.traffic.surge : this.traffic.normal;
     this.log('INFO', `Injecting ${count} ${kind.toLowerCase()} packet${count > 1 ? 's' : ''}.`);
     for (let i = 0; i < count; i++) this.send(gen());
     this.emitState();
@@ -516,7 +524,7 @@ export class Organism extends EventEmitter {
   }
 
   snapshot(): { filename: string; code: string } {
-    const out = exportSnapshot(this.pipeline, this.lineage, path.join(this.opts.rootDir, 'snapshots'));
+    const out = exportSnapshot(this.pipeline, this.lineage, path.join(this.def.dir, 'snapshots'));
     this.log('INFO', `Snapshot written: ${out.filename}.`);
     this.emitState();
     return out;
@@ -556,6 +564,7 @@ export class Organism extends EventEmitter {
     }));
     const strip = (c: Candidate | null) => { if (!c) return null; const { compiled: _c, prompt: _p, baseline: _b, ...view } = c; return view as CandidateView; };
     return {
+      pipeline: { name: this.def.name, description: this.def.description, available: listPipelines(this.opts.rootDir) },
       generation: this.lineage.generation,
       stateHash: this.pipeline.hash(),
       uptimeSec: Math.floor((Date.now() - this.started) / 1000),

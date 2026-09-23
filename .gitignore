@@ -9,3 +9,6 @@ lineage/
 snapshots/
 .ai-activity/
 corpus/
+pipelines/*/lineage/
+pipelines/*/corpus/
+pipelines/*/snapshots/

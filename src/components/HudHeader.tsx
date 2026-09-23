@@ -33,7 +33,7 @@ export function HudHeader({ state, connected, onInject, onSynthesize, onSplice, 
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 font-mono">gen {state.generation}</span>
           </h1>
           <div className="text-[11px] font-mono text-slate-400 flex items-center gap-2">
-            <span>self-repairing pipeline</span>
+            <span title={state.pipeline.description}>pipeline: {state.pipeline.name}</span>
             <span className="text-slate-600">·</span>
             <span className="text-slate-500">{state.stateHash.slice(0, 12)}</span>
             <span className="text-slate-600">·</span>

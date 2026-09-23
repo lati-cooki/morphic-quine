@@ -76,7 +76,7 @@ function scripted(name: string, fn: (req: PatchRequest) => string): Provider {
 
 const GENERAL_FIX = `function asyncBuffer(input) {
   const text = typeof input.payload === 'string' ? input.payload : null;
-  const region = text === null ? 'UNKNOWN' : text.split(':')[0].toUpperCase();
+  const region = text === null ? 'UNKNOWN' : text.split(':')[0].toUpperCase().slice(0, 16);
   return {
     packetId: input.id,
     cacheKey: input.cacheKey,

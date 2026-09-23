@@ -1,0 +1,413 @@
+{
+  "name": "parse-formats",
+  "description": "Parse four log formats into level (upper case: ERROR, WARN, INFO, DEBUG), service, message, and ts where the line carries a timestamp (ISO string for JSON lines). Formats: house 'LEVEL service: message'; JSON lines with ts/level/service/msg; RFC 3164 syslog '<pri>Mon dd hh:mm:ss host service[pid]: message' where level comes from pri & 7 (3=ERROR, 4=WARN, 6=INFO, 7=DEBUG); nginx access lines where service is 'nginx', message is 'METHOD path status', and level is ERROR for status >= 500, WARN for >= 400, else INFO. Anything unparseable is level UNKNOWN, service unknown.",
+  "nodeId": "parse",
+  "target": 0.95,
+  "scorer": "fields",
+  "examples": [
+    {
+      "input": {
+        "id": "j0",
+        "line": "{\"ts\": \"2026-09-23T14:00:11Z\", \"level\": \"debug\", \"service\": \"worker-1\", \"msg\": \"index rebuild took 14s\"}"
+      },
+      "expected": {
+        "level": "DEBUG",
+        "service": "worker-1",
+        "message": "index rebuild took 14s",
+        "ts": "2026-09-23T14:00:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j1",
+        "line": "{\"ts\": \"2026-09-23T14:01:11Z\", \"level\": \"debug\", \"service\": \"worker-1\", \"msg\": \"job 8812 retried\"}"
+      },
+      "expected": {
+        "level": "DEBUG",
+        "service": "worker-1",
+        "message": "job 8812 retried",
+        "ts": "2026-09-23T14:01:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j2",
+        "line": "{\"ts\": \"2026-09-23T14:02:11Z\", \"level\": \"warn\", \"service\": \"api\", \"msg\": \"job 8812 retried\"}"
+      },
+      "expected": {
+        "level": "WARN",
+        "service": "api",
+        "message": "job 8812 retried",
+        "ts": "2026-09-23T14:02:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j3",
+        "line": "{\"ts\": \"2026-09-23T14:03:11Z\", \"level\": \"debug\", \"service\": \"db\", \"msg\": \"job 8812 retried\"}"
+      },
+      "expected": {
+        "level": "DEBUG",
+        "service": "db",
+        "message": "job 8812 retried",
+        "ts": "2026-09-23T14:03:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j4",
+        "line": "{\"ts\": \"2026-09-23T14:04:11Z\", \"level\": \"warn\", \"service\": \"auth\", \"msg\": \"index rebuild took 14s\"}"
+      },
+      "expected": {
+        "level": "WARN",
+        "service": "auth",
+        "message": "index rebuild took 14s",
+        "ts": "2026-09-23T14:04:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j5",
+        "line": "{\"ts\": \"2026-09-23T14:05:11Z\", \"level\": \"info\", \"service\": \"api\", \"msg\": \"token expired for user 4412\"}"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "api",
+        "message": "token expired for user 4412",
+        "ts": "2026-09-23T14:05:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j6",
+        "line": "{\"ts\": \"2026-09-23T14:06:11Z\", \"level\": \"error\", \"service\": \"worker-1\", \"msg\": \"index rebuild took 14s\"}"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "worker-1",
+        "message": "index rebuild took 14s",
+        "ts": "2026-09-23T14:06:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j7",
+        "line": "{\"ts\": \"2026-09-23T14:07:11Z\", \"level\": \"debug\", \"service\": \"db\", \"msg\": \"pool exhausted\"}"
+      },
+      "expected": {
+        "level": "DEBUG",
+        "service": "db",
+        "message": "pool exhausted",
+        "ts": "2026-09-23T14:07:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j8",
+        "line": "{\"ts\": \"2026-09-23T14:08:11Z\", \"level\": \"warn\", \"service\": \"worker-1\", \"msg\": \"token expired for user 4412\"}"
+      },
+      "expected": {
+        "level": "WARN",
+        "service": "worker-1",
+        "message": "token expired for user 4412",
+        "ts": "2026-09-23T14:08:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "j9",
+        "line": "{\"ts\": \"2026-09-23T14:09:11Z\", \"level\": \"error\", \"service\": \"auth\", \"msg\": \"token expired for user 4412\"}"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "auth",
+        "message": "token expired for user 4412",
+        "ts": "2026-09-23T14:09:11Z"
+      }
+    },
+    {
+      "input": {
+        "id": "s0",
+        "line": "<12>Sep 23 14:00:13 host-0 cache[9834]: token expired for user 4412"
+      },
+      "expected": {
+        "level": "WARN",
+        "service": "cache",
+        "message": "token expired for user 4412"
+      }
+    },
+    {
+      "input": {
+        "id": "s1",
+        "line": "<14>Sep 23 14:01:13 host-1 sshd[7227]: job 8812 retried"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "sshd",
+        "message": "job 8812 retried"
+      }
+    },
+    {
+      "input": {
+        "id": "s2",
+        "line": "<12>Sep 23 14:02:13 host-2 cache[4829]: index rebuild took 14s"
+      },
+      "expected": {
+        "level": "WARN",
+        "service": "cache",
+        "message": "index rebuild took 14s"
+      }
+    },
+    {
+      "input": {
+        "id": "s3",
+        "line": "<11>Sep 23 14:03:13 host-3 db[7502]: pool exhausted"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "db",
+        "message": "pool exhausted"
+      }
+    },
+    {
+      "input": {
+        "id": "s4",
+        "line": "<13>Sep 23 14:04:13 host-4 cron[9041]: token expired for user 4412"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "cron",
+        "message": "token expired for user 4412"
+      }
+    },
+    {
+      "input": {
+        "id": "s5",
+        "line": "<13>Sep 23 14:05:13 host-5 sshd[3772]: job 8812 retried"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "sshd",
+        "message": "job 8812 retried"
+      }
+    },
+    {
+      "input": {
+        "id": "s6",
+        "line": "<13>Sep 23 14:06:13 host-6 db[1160]: job 8812 retried"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "db",
+        "message": "job 8812 retried"
+      }
+    },
+    {
+      "input": {
+        "id": "s7",
+        "line": "<11>Sep 23 14:07:13 host-7 cron[1776]: charge failed: card declined"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "cron",
+        "message": "charge failed: card declined"
+      }
+    },
+    {
+      "input": {
+        "id": "s8",
+        "line": "<14>Sep 23 14:08:13 host-8 db[286]: pool exhausted"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "db",
+        "message": "pool exhausted"
+      }
+    },
+    {
+      "input": {
+        "id": "s9",
+        "line": "<11>Sep 23 14:09:13 host-9 cache[3446]: token expired for user 4412"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "cache",
+        "message": "token expired for user 4412"
+      }
+    },
+    {
+      "input": {
+        "id": "n0",
+        "line": "10.0.0.1 - - [23/Sep/2026:14:00:15 +0000] \"POST /search?q=x HTTP/1.1\" 503 6561"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "POST /search?q=x 503"
+      }
+    },
+    {
+      "input": {
+        "id": "n1",
+        "line": "10.0.0.2 - - [23/Sep/2026:14:01:15 +0000] \"POST /api/orders HTTP/1.1\" 502 3302"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "POST /api/orders 502"
+      }
+    },
+    {
+      "input": {
+        "id": "n2",
+        "line": "10.0.0.3 - - [23/Sep/2026:14:02:15 +0000] \"POST /health HTTP/1.1\" 200 5148"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "nginx",
+        "message": "POST /health 200"
+      }
+    },
+    {
+      "input": {
+        "id": "n3",
+        "line": "10.0.0.4 - - [23/Sep/2026:14:03:15 +0000] \"POST /api/orders HTTP/1.1\" 500 1983"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "POST /api/orders 500"
+      }
+    },
+    {
+      "input": {
+        "id": "n4",
+        "line": "10.0.0.5 - - [23/Sep/2026:14:04:15 +0000] \"GET /login HTTP/1.1\" 503 1705"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "GET /login 503"
+      }
+    },
+    {
+      "input": {
+        "id": "n5",
+        "line": "10.0.0.6 - - [23/Sep/2026:14:05:15 +0000] \"GET /api/orders HTTP/1.1\" 500 8026"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "GET /api/orders 500"
+      }
+    },
+    {
+      "input": {
+        "id": "n6",
+        "line": "10.0.0.7 - - [23/Sep/2026:14:06:15 +0000] \"GET /login HTTP/1.1\" 500 8387"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "GET /login 500"
+      }
+    },
+    {
+      "input": {
+        "id": "n7",
+        "line": "10.0.0.8 - - [23/Sep/2026:14:07:15 +0000] \"GET /login HTTP/1.1\" 500 6337"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "GET /login 500"
+      }
+    },
+    {
+      "input": {
+        "id": "n8",
+        "line": "10.0.0.9 - - [23/Sep/2026:14:08:15 +0000] \"GET /search?q=x HTTP/1.1\" 500 3537"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "GET /search?q=x 500"
+      }
+    },
+    {
+      "input": {
+        "id": "n9",
+        "line": "10.0.0.10 - - [23/Sep/2026:14:09:15 +0000] \"GET /health HTTP/1.1\" 502 5033"
+      },
+      "expected": {
+        "level": "ERROR",
+        "service": "nginx",
+        "message": "GET /health 502"
+      }
+    },
+    {
+      "input": {
+        "id": "h0",
+        "line": "INFO api: GET /health 200"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "api",
+        "message": "GET /health 200"
+      }
+    },
+    {
+      "input": {
+        "id": "h1",
+        "line": "WARN api: token expired for user 4412"
+      },
+      "expected": {
+        "level": "WARN",
+        "service": "api",
+        "message": "token expired for user 4412"
+      }
+    },
+    {
+      "input": {
+        "id": "h2",
+        "line": "INFO api: index rebuild took 14s"
+      },
+      "expected": {
+        "level": "INFO",
+        "service": "api",
+        "message": "index rebuild took 14s"
+      }
+    },
+    {
+      "input": {
+        "id": "h3",
+        "line": "WARN api: job 8812 retried"
+      },
+      "expected": {
+        "level": "WARN",
+        "service": "api",
+        "message": "job 8812 retried"
+      }
+    },
+    {
+      "input": {
+        "id": "bad1",
+        "line": null
+      },
+      "expected": {
+        "level": "UNKNOWN",
+        "service": "unknown"
+      }
+    },
+    {
+      "input": {
+        "id": "bad2",
+        "line": ""
+      },
+      "expected": {
+        "level": "UNKNOWN",
+        "service": "unknown"
+      }
+    }
+  ]
+}
