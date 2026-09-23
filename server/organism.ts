@@ -6,7 +6,7 @@ import { Telemetry } from './telemetry';
 import { Sentinel, DEFAULT_SENTINEL } from './sentinel';
 import { Lineage, exportSnapshot } from './lineage';
 import { selectProvider, ProviderAttacker, type Provider } from './mutator';
-import { FuzzAttacker, runAttacks, previewInput, type Attacker, type AttackHit } from './attacker';
+import { FuzzAttacker, CompositeAttacker, runAttacks, previewInput, type Attacker, type AttackHit } from './attacker';
 import fs from 'node:fs';
 import { compileFunction, type CompiledFn } from './sandbox';
 import { performance } from 'node:perf_hooks';
@@ -90,7 +90,7 @@ export class Organism extends EventEmitter {
     const sel = selectProvider();
     this.provider = opts.provider ?? sel.active;
     this.providersAvailable = opts.provider ? [opts.provider.name] : sel.available;
-    this.attacker = opts.attacker ?? (process.env.ATTACKER !== 'fuzz' && this.provider.attack ? new ProviderAttacker(this.provider) : new FuzzAttacker());
+    this.attacker = opts.attacker ?? (process.env.ATTACKER !== 'fuzz' && this.provider.attack ? new CompositeAttacker([new FuzzAttacker(), new ProviderAttacker(this.provider)]) : new FuzzAttacker());
     this.loadAdversarialCorpus();
     try { this.goals = loadGoals(this.opts.goalsDir); } catch (err) { this.log('GOAL', `Could not load goals: ${(err as Error).message}`); }
     this.autonomous = this.opts.autonomous;
@@ -182,6 +182,8 @@ export class Organism extends EventEmitter {
       known: node.adversarial.slice(-20),
       max: this.opts.attackBatch,
     });
+    const warnings = (inputs as unknown[] & { warnings?: string[] }).warnings;
+    if (warnings?.length) this.log('ATTACK', `Part of the red team failed: ${warnings.join('; ')}`);
     const hits = runAttacks(fn, inputs, downstream.map((d) => d.fn));
     if (hits.length) {
       const added = node.addAdversarial(hits.map((h) => h.input));

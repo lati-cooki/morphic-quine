@@ -71,3 +71,24 @@ describe('parseAttackList', () => {
     expect(() => parseAttackList('[ (function(){ while(true){} })() ]', 10)).toThrow(/parseable/);
   });
 });
+
+import { CompositeAttacker } from '../server/attacker';
+
+describe('CompositeAttacker', () => {
+  it('merges parts, dedupes, and survives one part failing', async () => {
+    const { req } = await setup();
+    const failing = { name: 'llm', model: 'x', async generate() { throw new Error('quota'); } };
+    const dup = { name: 'dup', model: 'x', async generate(r: any) { return (await new FuzzAttacker().generate(r)).slice(0, 3); } };
+    const a = new CompositeAttacker([new FuzzAttacker(), failing, dup]);
+    const out = await a.generate({ ...req, max: 30 });
+    expect(a.name).toBe('fuzz+llm+dup');
+    expect(out.length).toBeGreaterThan(5);
+    expect(new Set(out.map((o) => JSON.stringify(o))).size).toBe(out.length);
+    expect((out as any).warnings).toEqual(['llm: quota']);
+  });
+  it('throws only when every part fails', async () => {
+    const { req } = await setup();
+    const a = new CompositeAttacker([{ name: 'a', model: '', async generate() { throw new Error('x'); } }]);
+    await expect(a.generate(req)).rejects.toThrow(/a: x/);
+  });
+});

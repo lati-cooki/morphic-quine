@@ -73,8 +73,9 @@ unhardened rather than thrown away.
 
 Two attackers ship. `fuzz` is a deterministic structural mutator (wrong types, empties, extremes,
 oversized strings and arrays) that stays inside the observed input shape; only the first node gets
-whole-input replacements, because only it sees raw packets. When the patch provider is an LLM it is
-also the attacker unless `ATTACKER=fuzz`. `ATTACK_ROUNDS` is not exposed yet; edit `attackRounds` in
+whole-input replacements, because only it sees raw packets. When the patch provider is an LLM, the
+red team is the fuzzer plus that model, merged, unless `ATTACKER=fuzz`. In practice the fuzzer finds
+most of the hits; the model contributes semantic cases the fuzzer cannot guess. `ATTACK_ROUNDS` is not exposed yet; edit `attackRounds` in
 the Organism options.
 
 **Probe** in a node's detail modal attacks the live code of a healthy node. Hits are recorded as

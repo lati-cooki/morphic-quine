@@ -120,3 +120,25 @@ export function previewInput(v: unknown, max = 160): string {
   const s = key(v);
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
+
+/** Runs several attackers and merges their inputs. The fuzzer is cheap and deterministic, so it always rides along with an LLM attacker. */
+export class CompositeAttacker implements Attacker {
+  constructor(private parts: Attacker[]) {}
+  get name() { return this.parts.map((p) => p.name).join('+'); }
+  get model() { return this.parts.map((p) => p.model).join('+'); }
+  async generate(req: AttackRequest): Promise<unknown[]> {
+    const per = Math.max(4, Math.ceil(req.max / this.parts.length));
+    const results = await Promise.allSettled(this.parts.map((p) => p.generate({ ...req, max: per })));
+    const seen = new Set<string>();
+    const out: unknown[] = [];
+    const errors: string[] = [];
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') { errors.push(`${this.parts[i].name}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`); return; }
+      for (const v of r.value) { const k = previewInput(v, 4000); if (!seen.has(k)) { seen.add(k); out.push(v); } }
+    });
+    if (!out.length && errors.length) throw new Error(errors.join('; '));
+    const result = out.slice(0, req.max) as unknown[] & { warnings?: string[] };
+    if (errors.length) result.warnings = errors;
+    return result;
+  }
+}
