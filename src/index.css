@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    background-color: #03060c;
+    color: #e2e8f0;
+  }
+}
+
+.font-hud {
+  font-family: 'Rajdhani', sans-serif;
+}
+
+.font-mono-hud {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.font-display {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+/* Sci-fi HUD Background Grid & Scanlines */
+.hud-grid {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(56, 189, 248, 0.04) 1px, transparent 1px);
+}
+
+.hud-dots {
+  background-image: radial-gradient(rgba(56, 189, 248, 0.12) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.hud-panel-glow {
+  box-shadow: 0 0 25px -5px rgba(14, 165, 233, 0.08), inset 0 0 15px -5px rgba(56, 189, 248, 0.04);
+}
+
+.hud-amber-glow {
+  box-shadow: 0 0 35px -2px rgba(245, 158, 11, 0.35), inset 0 0 20px 0 rgba(245, 158, 11, 0.15);
+}
+
+.hud-cyan-glow {
+  box-shadow: 0 0 25px -2px rgba(6, 182, 212, 0.25), inset 0 0 15px 0 rgba(6, 182, 212, 0.1);
+}
+
+.scanline {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0) 50%,
+    rgba(0, 0, 0, 0.3) 50%,
+    rgba(0, 0, 0, 0.3)
+  );
+  background-size: 100% 4px;
+}
+
+@keyframes radarSweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes mitosisFlicker {
+  0%, 100% { border-color: rgba(245, 158, 11, 0.8); }
+  50% { border-color: rgba(251, 191, 36, 1); box-shadow: 0 0 45px rgba(245, 158, 11, 0.6); }
+}
+
+.animate-radar {
+  animation: radarSweep 6s linear infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 3s ease-in-out infinite;
+}
+
+.animate-mitosis {
+  animation: mitosisFlicker 2s ease-in-out infinite;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Morphic Quine HUD",
+  "description": "Visual prototype and living HUD for the Morphic Quine computational graph, featuring autonomous node mitosis, homeostatic vitals, cortical mutation AST diff, and quine integrity.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
