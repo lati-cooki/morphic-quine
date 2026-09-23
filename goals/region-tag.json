@@ -1,6 +1,6 @@
 {
   "name": "region-tag",
-  "description": "Every commit record carries a `region` field: the payload text before the first ':' in upper case, or UNKNOWN when the payload is not a string.",
+  "description": "Every commit record carries a `region` field: the payload text before the first ':' in upper case, truncated to at most 16 characters, or UNKNOWN when the payload is not a string.",
   "nodeId": "async_buffer",
   "target": 0.95,
   "scorer": "fields",
@@ -203,6 +203,60 @@
       },
       "expected": {
         "region": "UNKNOWN"
+      }
+    },
+    {
+      "input": {
+        "id": "g_long1",
+        "data": "northamerica-east-2:100:tick"
+      },
+      "expected": {
+        "region": "NORTHAMERICA-EAS"
+      }
+    },
+    {
+      "input": {
+        "id": "g_long2",
+        "data": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx:1:frame"
+      },
+      "expected": {
+        "region": "XXXXXXXXXXXXXXXX"
+      }
+    },
+    {
+      "input": {
+        "id": "g_long3",
+        "data": "southpacific-central-zone:7:trace"
+      },
+      "expected": {
+        "region": "SOUTHPACIFIC-CEN"
+      }
+    },
+    {
+      "input": {
+        "id": "g_long4",
+        "data": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      "expected": {
+        "region": "YYYYYYYYYYYYYYYY"
+      }
+    },
+    {
+      "input": {
+        "id": "g_long5",
+        "data": "europe-west-4-extended:9:sensor"
+      },
+      "expected": {
+        "region": "EUROPE-WEST-4-EX"
+      }
+    },
+    {
+      "input": {
+        "id": "g_long6",
+        "data": "asia-northeast-1b-longname:3:tick"
+      },
+      "expected": {
+        "region": "ASIA-NORTHEAST-1"
       }
     }
   ]
