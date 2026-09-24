@@ -30,6 +30,10 @@ export interface NodeView {
   recordedFailures: number;
   /** Attacker-discovered inputs this node's code must survive. */
   adversarialInputs: number;
+  /** Declared output contract (field → type), or null if none. */
+  emits: Record<string, string> | null;
+  /** What this node may assume about its input: upstream's emits, or the pipeline input contract. */
+  inputContract: Record<string, string> | null;
 }
 
 export interface EdgeView {

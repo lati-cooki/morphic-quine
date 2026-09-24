@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { compileFunction, type CompiledFn } from './sandbox';
 import type { EdgeSpec, NodeSpec } from './nodes';
 import type { NodeHealth } from '../src/types';
+import { parseContract, checkContract, describeViolations, type Contract, type FieldSpec } from './contracts';
 
 export interface TrafficSample {
   input: unknown;
@@ -43,6 +44,8 @@ class Ring<T> {
 
 export class RuntimeNode {
   fn: CompiledFn;
+  /** Parsed emits contract. */
+  readonly emits: FieldSpec[];
   version = 1;
   history: string[] = [];
   executions = 0;
@@ -57,6 +60,7 @@ export class RuntimeNode {
 
   constructor(public spec: NodeSpec, timeoutMs: number) {
     this.fn = compileFunction(spec.source, { timeoutMs });
+    this.emits = parseContract(spec.emits);
   }
 
   get source() { return this.fn.source; }
@@ -148,6 +152,8 @@ export interface ExecutionResult {
 export interface PipelineOptions {
   timeoutMs?: number;
   slowMs?: number;
+  /** Contract for external packets, assumed by the first node. */
+  input?: Contract;
 }
 
 export class Pipeline {
@@ -159,10 +165,12 @@ export class Pipeline {
   totalErrors = 0;
   private timeoutMs: number;
   private slowMs: number;
+  readonly inputContract: Contract | undefined;
 
   constructor(specs: NodeSpec[], edges: EdgeSpec[], opts: PipelineOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? 250;
     this.slowMs = opts.slowMs ?? DEFAULT_THRESHOLDS.p95Ms;
+    this.inputContract = opts.input;
     for (const s of specs) this.nodes.set(s.id, new RuntimeNode(s, this.timeoutMs));
     this.edges = edges;
     this.order = topoSort(specs.map((s) => s.id), edges);
@@ -176,6 +184,13 @@ export class Pipeline {
       depth.set(id, parents.length ? Math.max(...parents) + 1 : 0);
     }
     return depth.get(nodeId) ?? 0;
+  }
+
+  /** What a node may assume about its input: the upstream node's emits, or the pipeline input contract for the first node. */
+  inputContractOf(nodeId: string): Contract | undefined {
+    const idx = this.order.indexOf(nodeId);
+    if (idx <= 0) return this.inputContract;
+    return this.nodes.get(this.order[idx - 1])!.spec.emits;
   }
 
   downstreamOf(nodeId: string): RuntimeNode[] {
@@ -195,6 +210,8 @@ export class Pipeline {
       const ts = performance.now();
       try {
         current = node.fn.call(input);
+        const bad = checkContract(node.emits, current);
+        if (bad.length) throw new ContractViolationError(describeViolations(bad));
         const latencyMs = performance.now() - ts;
         node.record({ input, ok: true, latencyMs, ts }, this.slowMs);
         trace.push({ nodeId, latencyMs, ok: true });
@@ -218,7 +235,11 @@ export class Pipeline {
     for (const id of this.order) {
       nodeInputs.set(id, current);
       const fn = overrides.get(id) ?? this.nodes.get(id)!.fn;
-      try { current = fn.call(current); }
+      try {
+        current = fn.call(current);
+        const bad = checkContract(this.nodes.get(id)!.emits, current);
+        if (bad.length) throw new ContractViolationError(describeViolations(bad));
+      }
       catch (err) {
         const e = new Error(`${id}: ${err instanceof Error ? err.message : String(err)}`) as Error & { nodeId: string; nodeInputs: Map<string, unknown>; cause: unknown };
         e.nodeId = id;
@@ -266,6 +287,10 @@ export class Pipeline {
     for (const id of this.order) h.update(`${id}:${this.nodes.get(id)!.source};`);
     return h.digest('hex');
   }
+}
+
+export class ContractViolationError extends Error {
+  constructor(msg: string) { super(msg); this.name = 'ContractViolation'; }
 }
 
 export function topoSort(ids: string[], edges: EdgeSpec[]): string[] {

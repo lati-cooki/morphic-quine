@@ -4,12 +4,19 @@
  *   2. Its eviction-bucket scan is O(dim²) over the vector, and dim scales with payload length.
  * A packet with a missing payload crashes it; a packet with an oversized payload chokes it.
  */
+import type { Contract } from './contracts';
+
 export interface NodeSpec {
   id: string;
   name: string;
   role: string;
   source: string;
+  /** What this node guarantees to emit. The next node may assume it; the fuzzer stays inside it; the runtime enforces it. */
+  emits?: Contract;
 }
+
+/** What external packets to the default pipeline look like. Ingest may assume this; anything else is the sender's fault. */
+export const DEFAULT_INPUT_CONTRACT: Contract = { id: 'string?', data: 'any?' };
 
 export interface EdgeSpec {
   from: string;
@@ -21,6 +28,7 @@ export const DEFAULT_NODES: NodeSpec[] = [
     id: 'stream_ingest',
     name: 'StreamIngest',
     role: 'Ingestion gateway',
+    emits: { id: 'string', payload: 'any?', sizeBytes: 'integer', ingestedAt: 'number' },
     source: `function streamIngest(packet) {
   const payload = packet && packet.data;
   return {
@@ -35,6 +43,7 @@ export const DEFAULT_NODES: NodeSpec[] = [
     id: 'vector_core',
     name: 'VectorCore',
     role: 'Payload → feature vector',
+    emits: { id: 'string', payload: 'any?', ingestedAt: 'number', vector: 'array', dim: 'integer' },
     source: `function vectorCore(input) {
   const text = typeof input.payload === 'string' ? input.payload : JSON.stringify(input.payload === undefined ? '' : input.payload);
   const dim = Math.max(16, Math.min(4096, text.length));
@@ -51,6 +60,7 @@ export const DEFAULT_NODES: NodeSpec[] = [
     id: 'jit_cache',
     name: 'JIT_Cache',
     role: 'Cache key + eviction bucket',
+    emits: { id: 'string', ingestedAt: 'number', dim: 'integer', cached: 'boolean', cacheKey: 'string', evictionBucket: 'integer' },
     source: `function jitCache(input) {
   // Derive the cache key from the payload text.
   const key = input.payload.trim().toLowerCase().slice(0, 32);
@@ -78,6 +88,7 @@ export const DEFAULT_NODES: NodeSpec[] = [
     id: 'async_buffer',
     name: 'AsyncBuffer',
     role: 'Commit record',
+    emits: { packetId: 'string', cacheKey: 'string', evictionBucket: 'integer', dim: 'integer', latencyMs: 'number', status: 'string' },
     source: `function asyncBuffer(input) {
   return {
     packetId: input.id,

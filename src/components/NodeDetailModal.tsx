@@ -29,6 +29,11 @@ export function NodeDetailModal({ node, state, onClose, onSynthesize, onProbe }:
           <Stat l="recorded" v={`${node.recordedInputs} inputs · ${node.recordedFailures} fail · ${node.adversarialInputs} adversarial`} />
         </div>
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-3 text-[11px]">
+          <ContractBox label="may assume (input)" c={node.inputContract} />
+          <ContractBox label="must emit (output)" c={node.emits} />
+        </div>
+
         {node.lastError && <div className="mb-3 p-2.5 rounded-lg bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs break-all">{node.lastError}</div>}
 
         <div className="flex-1 min-h-0 rounded-lg bg-[#03050a] border border-slate-800 overflow-auto">
@@ -47,6 +52,19 @@ export function NodeDetailModal({ node, state, onClose, onSynthesize, onProbe }:
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ContractBox({ label, c }: { label: string; c: Record<string, string> | null }) {
+  return (
+    <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800">
+      <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{label}</div>
+      {c && Object.keys(c).length ? (
+        <div className="flex flex-wrap gap-1">
+          {Object.entries(c).map(([k, v]) => <span key={k} className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300"><span className="text-cyan-300">{k}</span><span className="text-slate-500">: </span>{v}</span>)}
+        </div>
+      ) : <span className="text-slate-500">none declared · any object</span>}
     </div>
   );
 }

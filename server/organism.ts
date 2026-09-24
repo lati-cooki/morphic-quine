@@ -7,7 +7,8 @@ import { Sentinel, DEFAULT_SENTINEL } from './sentinel';
 import { Lineage, exportSnapshot } from './lineage';
 import { selectProvider, ProviderAttacker, PROVIDER_TIMEOUT_MS, type Provider } from './mutator';
 import { UsageMeter, priceKnown, type Usage } from './usage';
-import { FuzzAttacker, CompositeAttacker, runAttacks, previewInput, withTimeout, type Attacker, type AttackHit } from './attacker';
+import { FuzzAttacker, CompositeAttacker, runAttacks, previewInput, withTimeout, filterByContract, type Attacker, type AttackHit } from './attacker';
+import { describeContract } from './contracts';
 import fs from 'node:fs';
 import { compileFunction, type CompiledFn } from './sandbox';
 import { performance } from 'node:perf_hooks';
@@ -89,7 +90,7 @@ export class Organism extends EventEmitter {
   constructor(opts: OrganismOptions) {
     super();
     this.def = loadPipeline(opts.rootDir, opts.pipeline ?? 'default');
-    this.pipeline = new Pipeline(this.def.nodes, this.def.edges);
+    this.pipeline = new Pipeline(this.def.nodes, this.def.edges, { input: this.def.input });
     this.traffic = trafficFor(this.def);
     this.opts = {
       ambientIntervalMs: 400,
@@ -179,13 +180,20 @@ export class Organism extends EventEmitter {
   private loadAdversarialCorpus() {
     if (!fs.existsSync(this.corpusDir)) return;
     let total = 0;
+    let pruned = 0;
     for (const [id, node] of this.pipeline.nodes) {
       const file = path.join(this.corpusDir, `${id}.json`);
       if (!fs.existsSync(file)) continue;
-      try { total += node.addAdversarial(JSON.parse(fs.readFileSync(file, 'utf-8'))); }
+      try {
+        const stored: unknown[] = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        // Hits recorded before a contract was declared may be inputs upstream can no longer send. Drop them.
+        const { kept, dropped } = filterByContract(stored, this.pipeline.inputContractOf(id));
+        total += node.addAdversarial(kept);
+        if (dropped) { pruned += dropped; this.saveAdversarialCorpus(id); }
+      }
       catch (err) { this.log('ATTACK', `Could not read adversarial corpus for ${id}: ${(err as Error).message}`); }
     }
-    if (total) this.log('ATTACK', `Loaded ${total} adversarial input${total === 1 ? '' : 's'} from disk.`);
+    if (total || pruned) this.log('ATTACK', `Loaded ${total} adversarial input${total === 1 ? '' : 's'} from disk${pruned ? `; pruned ${pruned} that now fall outside an input contract` : ''}.`);
   }
 
   private saveAdversarialCorpus(nodeId: string) {
@@ -201,15 +209,19 @@ export class Organism extends EventEmitter {
   private async attack(nodeId: string, fn: CompiledFn, label: string): Promise<{ tried: number; hits: AttackHit[] }> {
     const node = this.pipeline.nodes.get(nodeId)!;
     const downstream = this.pipeline.downstreamOf(nodeId);
-    const inputs = await withTimeout(this.attacker.generate({
+    const inputContract = this.pipeline.inputContractOf(nodeId);
+    const raw = await withTimeout(this.attacker.generate({
       node: { id: nodeId, name: node.spec.name, role: node.spec.role, source: fn.source, depth: this.pipeline.depthOf(nodeId) },
       samples: node.sampleInputs(),
       downstream: downstream.map((d) => ({ name: d.spec.name, source: d.source })),
       known: node.adversarial.slice(-20),
       max: this.opts.attackBatch,
+      inputContract,
     }), this.opts.providerTimeoutMs, `${this.attacker.name} attack`);
-    const warnings = (inputs as unknown[] & { warnings?: string[] }).warnings;
+    const warnings = (raw as unknown[] & { warnings?: string[] }).warnings;
     if (warnings?.length) this.log('ATTACK', `Part of the red team failed: ${warnings.join('; ')}`);
+    const { kept: inputs, dropped } = filterByContract(raw, inputContract);
+    if (dropped) this.log('ATTACK', `${dropped} attack input${dropped === 1 ? '' : 's'} dropped: outside ${node.spec.name}'s input contract (${describeContract(inputContract)}). Those would be upstream's bug.`);
     const hits = runAttacks(fn, inputs, downstream.map((d) => d.fn));
     if (hits.length) {
       const added = node.addAdversarial(hits.map((h) => h.input));
@@ -471,6 +483,7 @@ export class Organism extends EventEmitter {
         const callStart = Date.now();
         const patch = await withTimeout(this.provider.synthesize({
           node: { id: target, name: node.spec.name, role: node.spec.role, source: node.source },
+          contracts: { input: describeContract(this.pipeline.inputContractOf(target)), emits: describeContract(node.spec.emits) },
           failures: node.recentFailures().map((f) => ({ input: f.input, error: f.error ?? 'unknown' })),
           slow: node.recentSlow().map((s) => ({ input: s.input, latencyMs: s.latencyMs })),
           downstream: downstream.map((d) => ({ name: d.spec.name, source: d.source })),
@@ -487,6 +500,7 @@ export class Organism extends EventEmitter {
           corpus,
           downstream: downstream.map((d) => d.fn),
           goal: goal ? { goal, run: (input) => this.pipeline.dryRun(input, overrides).output } : undefined,
+          contract: node.emits,
         });
         const cand: Candidate = {
           id: `candidate_${target}`,
@@ -530,7 +544,7 @@ export class Organism extends EventEmitter {
           if (hits.length) {
             // Re-score with the hits in the corpus so the number on the card is honest, then send it back.
             for (const h of hits) corpus.push(h.input);
-            cand.fitness = evaluateCandidate({ candidate: compiled, incumbent: node.fn, corpus, downstream: downstream.map((d) => d.fn), goal: goal ? { goal, run: (input) => this.pipeline.dryRun(input, overrides).output } : undefined });
+            cand.fitness = evaluateCandidate({ candidate: compiled, incumbent: node.fn, corpus, downstream: downstream.map((d) => d.fn), goal: goal ? { goal, run: (input) => this.pipeline.dryRun(input, overrides).output } : undefined, contract: node.emits });
             this.log('EVAL', `Attempt ${attempt} re-scored with adversarial inputs: fitness ${cand.fitness.score}.`);
             if (cand.fitness.score > (best?.fitness.score ?? -1) || best === cand) best = cand;
             feedback = describeShortfall(cand) + `\n\nAdversarial inputs that broke this version:\n` + hits.slice(0, 8).map((h) => `- ${previewInput(h.input, 200)} → ${h.error}`).join('\n');
@@ -657,6 +671,8 @@ export class Organism extends EventEmitter {
         recordedInputs: n.recordedInputs(),
         recordedFailures: n.recentFailures().length,
         adversarialInputs: n.adversarial.length,
+        emits: n.spec.emits ?? null,
+        inputContract: this.pipeline.inputContractOf(id) ?? null,
       };
     });
     const edges = this.pipeline.edges.map((e) => ({

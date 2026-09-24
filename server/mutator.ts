@@ -10,6 +10,8 @@ import type { Usage } from './usage';
 
 export interface PatchRequest {
   node: { id: string; name: string; role: string; source: string };
+  /** Human-readable contracts: what this node may assume about its input, and what it must emit. */
+  contracts?: { input: string; emits: string };
   failures: Array<{ input: unknown; error: string }>;
   slow: Array<{ input: unknown; latencyMs: number }>;
   downstream: Array<{ name: string; source: string }>;
@@ -57,7 +59,8 @@ Rules:
 
 export function buildAttackPrompt(req: AttackRequest): string {
   const parts = [
-    `# Target: ${req.node.name} (${req.node.id})${req.node.depth === 0 ? ' — first node, receives raw external packets; whole-input replacement allowed' : ''}\nRole: ${req.node.role}\n\n\`\`\`js\n${req.node.source}\n\`\`\``,
+    `# Target: ${req.node.name} (${req.node.id})${req.node.depth === 0 ? ' — first node, receives raw external packets' : ''}\nRole: ${req.node.role}\n\n\`\`\`js\n${req.node.source}\n\`\`\``,
+    `# Input contract (stay inside it; inputs that violate it are rejected before they reach the function): ${req.inputContract ? Object.entries(req.inputContract).map(([k, v]) => `${k}: ${v}`).join(', ') : 'none declared, any input allowed'}`,
     `# Sample inputs it receives\n${req.samples.slice(0, 6).map((s, i) => `${i + 1}. ${preview(s, 400)}`).join('\n')}`,
   ];
   if (req.downstream.length) parts.push(`# Downstream consumers of its output\n${req.downstream.map((d) => `\`\`\`js\n${d.source}\n\`\`\``).join('\n')}`);
@@ -114,6 +117,9 @@ function preview(v: unknown, max = 300): string {
 export function buildPrompt(req: PatchRequest): string {
   const parts: string[] = [];
   parts.push(`# Target node: ${req.node.name} (${req.node.id})\nRole: ${req.node.role}\n\n\`\`\`js\n${req.node.source}\n\`\`\``);
+  if (req.contracts) {
+    parts.push(`# Contracts\nInput guarantee (upstream promises every field listed; fields marked ? may be absent; undeclared fields may carry anything or be missing): ${req.contracts.input}\nOutput obligation (every emitted object must satisfy this; extra fields are fine): ${req.contracts.emits}\nInputs that break the input guarantee are upstream's defect, not yours; do not add guards for them at the expense of clarity. Inputs inside the guarantee must never make you throw or violate the output obligation.`);
+  }
   if (req.failures.length) {
     parts.push(`# Recorded failures (${req.failures.length})\n` + req.failures.map((f, i) => `${i + 1}. input: ${preview(f.input)}\n   error: ${f.error}`).join('\n'));
   }

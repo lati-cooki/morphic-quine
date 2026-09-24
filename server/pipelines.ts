@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_EDGES, DEFAULT_NODES, packets, type EdgeSpec, type NodeSpec } from './nodes';
+import { DEFAULT_EDGES, DEFAULT_NODES, DEFAULT_INPUT_CONTRACT, packets, type EdgeSpec, type NodeSpec } from './nodes';
+import { parseContract, type Contract } from './contracts';
 
 export interface TrafficDef {
   /** Packets the ambient loop cycles through. A fresh id is stamped on each send. */
@@ -17,6 +18,8 @@ export interface PipelineDef {
   nodes: NodeSpec[];
   edges: EdgeSpec[];
   traffic: TrafficDef;
+  /** What external packets look like. The first node may assume it. */
+  input?: Contract;
   /** Where lineage/, corpus/, snapshots/ and goals/ live for this pipeline. */
   dir: string;
 }
@@ -33,6 +36,7 @@ export function loadPipeline(rootDir: string, name = 'default'): PipelineDef {
       nodes: DEFAULT_NODES,
       edges: DEFAULT_EDGES,
       traffic: { normal: [], malformed: [], surge: [] },
+      input: DEFAULT_INPUT_CONTRACT,
       dir: rootDir,
     };
   }
@@ -45,12 +49,16 @@ export function loadPipeline(rootDir: string, name = 'default'): PipelineDef {
     name: String(n.name ?? n.id),
     role: String(n.role ?? ''),
     source: Array.isArray(n.source) ? n.source.join('\n') : String(n.source),
+    emits: n.emits as Contract | undefined,
   }));
+  for (const n of nodes) parseContract(n.emits); // validate early
+  const input = raw.input as Contract | undefined;
+  parseContract(input);
   if (nodes.length === 0) throw new Error(`Pipeline ${name} has no nodes`);
   const edges: EdgeSpec[] = raw.edges ?? nodes.slice(1).map((n, i) => ({ from: nodes[i].id, to: n.id }));
   const traffic: TrafficDef = raw.traffic ?? { normal: [] };
   if (!Array.isArray(traffic.normal) || traffic.normal.length === 0) throw new Error(`Pipeline ${name} needs traffic.normal samples`);
-  return { name, description: String(raw.description ?? ''), nodes, edges, traffic, dir };
+  return { name, description: String(raw.description ?? ''), nodes, edges, traffic, input, dir };
 }
 
 let seq = 0;

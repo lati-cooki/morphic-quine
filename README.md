@@ -65,6 +65,27 @@ must be present and every downstream node must accept the output), 15% latency a
 budget. A candidate that scores below the threshold gets one retry with the evaluator's findings in
 the prompt. Anything below threshold stays a candidate for manual splice.
 
+## Contracts
+
+Each node declares what it emits, and that declaration is the next node's input guarantee:
+
+```json
+"emits": { "id": "string", "line": "string", "receivedAt": "number", "ts": "string|null", "meta": "object?" }
+```
+
+Types: `string`, `number` (finite), `integer`, `boolean`, `object`, `array`, `null`, `any`; unions with `|`;
+`?` marks a field optional. Undeclared fields are unconstrained, so nodes can pass extras through. The
+pipeline file's top-level `input` is what external packets promise the first node.
+
+Four things consume the contract. The runtime checks every node's output on every packet, so a splice
+that breaks its contract faults immediately and the sentinel treats it like any other error. The
+evaluator scores candidate output against it. The fuzzer mutates only within what upstream can send,
+so `line: null` is never thrown at a node whose upstream guarantees a string, and any LLM attack
+outside the contract is dropped with a log line. The synthesis prompt states both the input guarantee
+and the output obligation, and tells the model not to spend clarity guarding against inputs upstream
+has promised not to send. Adversarial hits recorded before a contract existed are pruned at boot if
+they now fall outside it.
+
 ## Red team
 
 Fitness on recorded traffic proves a candidate handles what happened. The red team asks what could

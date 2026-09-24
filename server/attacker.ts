@@ -1,4 +1,5 @@
 import type { CompiledFn } from './sandbox';
+import { parseContract, permits, checkContract, type Contract } from './contracts';
 
 export interface AttackRequest {
   node: { id: string; name: string; role: string; source: string; depth: number };
@@ -8,6 +9,16 @@ export interface AttackRequest {
   /** Attacks that already landed, so the attacker looks elsewhere. */
   known: unknown[];
   max: number;
+  /** What upstream guarantees about this node's input. Attacks must stay inside it; anything outside is upstream's bug, not this node's. */
+  inputContract?: Contract;
+}
+
+/** Drop candidate inputs that violate the declared input contract. Returns kept inputs and how many were dropped. */
+export function filterByContract(inputs: unknown[], contract: Contract | undefined): { kept: unknown[]; dropped: number } {
+  const fields = parseContract(contract);
+  if (!fields.length) return { kept: inputs, dropped: 0 };
+  const kept = inputs.filter((i) => checkContract(fields, i).length === 0);
+  return { kept, dropped: inputs.length - kept.length };
 }
 
 export interface Attacker {
@@ -55,10 +66,12 @@ export class FuzzAttacker implements Attacker {
   async generate(req: AttackRequest): Promise<unknown[]> {
     const out: unknown[] = [];
     const seen = new Set<string>();
+    const fields = parseContract(req.inputContract);
     const push = (v: unknown) => {
       const k = key(v);
       if (seen.has(k)) return;
       for (const kn of req.known) if (key(kn) === k) return;
+      if (fields.length && checkContract(fields, v).length) return;   // outside what upstream can send
       seen.add(k);
       out.push(v);
     };
@@ -103,6 +116,7 @@ export class FuzzAttacker implements Attacker {
     for (let i = 0; i < maxLen && out.length < req.max; i++) {
       for (const { sample, k, variants } of perKey) {
         if (i >= variants.length) continue;
+        if (!permits(fields, k, variants[i])) continue;   // e.g. line: null when upstream guarantees a string
         const m: Record<string, unknown> = { ...sample };
         if (variants[i] === undefined) delete m[k]; else m[k] = variants[i];
         push(m);

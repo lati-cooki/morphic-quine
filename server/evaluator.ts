@@ -3,6 +3,7 @@ import type { CompiledFn } from './sandbox';
 import type { FitnessReport, LatencyStats } from '../src/types';
 import type { Goal, GoalScore } from './goals';
 import { scoreGoal } from './goals';
+import { checkContract, describeViolations, type FieldSpec } from './contracts';
 
 export interface EvaluateInput {
   candidate: CompiledFn;
@@ -14,6 +15,8 @@ export interface EvaluateInput {
   latencyBudgetMs?: number;
   /** When set, the candidate is also scored on the goal's holdout examples via a full pipeline run. */
   goal?: { goal: Goal; run: (input: unknown) => unknown };
+  /** The node's declared emits contract. Every candidate output must satisfy it. */
+  contract?: FieldSpec[];
 }
 
 const WEIGHTS = { pass: 0.55, contract: 0.30, latency: 0.15 };
@@ -89,7 +92,11 @@ export function evaluateCandidate(args: EvaluateInput): FitnessReport {
     passes++;
 
     let ok = true;
-    if (incumbentOk && isPlainObject(incumbentOut)) {
+    if (args.contract?.length) {
+      const bad = checkContract(args.contract, out);
+      if (bad.length) { ok = false; violations.push({ input: preview(input), reason: `Contract: ${describeViolations(bad)}` }); }
+    }
+    if (ok && incumbentOk && isPlainObject(incumbentOut)) {
       const missing = Object.keys(incumbentOut).filter((k) => !(k in out));
       if (missing.length) { ok = false; violations.push({ input: preview(input), reason: `Missing keys: ${missing.join(', ')}` }); }
     }
