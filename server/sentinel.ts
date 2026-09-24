@@ -7,6 +7,8 @@ export interface SentinelOptions {
   cooldownMs: number;
   /** executions to watch after a splice before passing judgement */
   observeSamples: number;
+  /** A latency breach needs at least this many slow samples in the window, not just a nudged p95. */
+  minSlowSamples: number;
 }
 
 export const DEFAULT_SENTINEL: SentinelOptions = {
@@ -15,6 +17,7 @@ export const DEFAULT_SENTINEL: SentinelOptions = {
   minSamples: 5,
   cooldownMs: 20_000,
   observeSamples: 25,
+  minSlowSamples: 5,
 };
 
 export interface Breach {
@@ -41,7 +44,11 @@ export class Sentinel {
 
   constructor(private opts: SentinelOptions = DEFAULT_SENTINEL, private now: () => number = () => Date.now()) {}
 
-  check(stats: Array<{ nodeId: string } & NodeWindowStats>): Breach[] {
+  /**
+   * @param hostStalled true when the process itself recently stalled (sleep/wake, long GC). Latency
+   *   breaches are skipped while it holds; error-rate breaches still count.
+   */
+  check(stats: Array<{ nodeId: string } & NodeWindowStats>, hostStalled = false): Breach[] {
     const out: Breach[] = [];
     for (const s of stats) {
       if (s.samples < this.opts.minSamples) continue;
@@ -50,8 +57,8 @@ export class Sentinel {
       if (this.now() - last < this.opts.cooldownMs) continue;
       if (s.errorRate > this.opts.errorRateThreshold) {
         out.push({ nodeId: s.nodeId, reason: 'error_rate', detail: `error rate ${(s.errorRate * 100).toFixed(1)}% over ${s.samples} executions` });
-      } else if (s.p95 > this.opts.p95ThresholdMs) {
-        out.push({ nodeId: s.nodeId, reason: 'latency', detail: `p95 ${s.p95.toFixed(1)}ms over ${s.samples} executions` });
+      } else if (!hostStalled && s.p95 > this.opts.p95ThresholdMs && s.slowCount >= this.opts.minSlowSamples) {
+        out.push({ nodeId: s.nodeId, reason: 'latency', detail: `p95 ${s.p95.toFixed(1)}ms, ${s.slowCount} slow samples over ${s.samples} executions` });
       }
     }
     for (const b of out) this.lastTrigger.set(b.nodeId, this.now());

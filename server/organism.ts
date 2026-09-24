@@ -76,6 +76,7 @@ export class Organism extends EventEmitter {
   private goalScores = new Map<string, GoalScore>();
   private goalLastTry = new Map<string, number>();
   private goalFeedback = new Map<string, string>();
+  private stallNoticeAt: number | null = null;
   private activeGoal: string | null = null;
 
   constructor(opts: OrganismOptions) {
@@ -229,6 +230,27 @@ export class Organism extends EventEmitter {
     this.emitState();
   }
 
+  /**
+   * A latency breach is only real if the slow inputs are still slow when replayed now. Runs each
+   * recorded slow input three times against the live function and keeps the fastest run, so a
+   * single hiccup cannot fake a defect and a genuine algorithmic cost cannot hide.
+   */
+  private confirmSlowness(nodeId: string): { confirmed: boolean; tested: number; worstMs: number } {
+    const node = this.pipeline.nodes.get(nodeId)!;
+    const inputs = node.recentSlow().map((s) => s.input);
+    let worst = 0;
+    for (const input of inputs) {
+      let best = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now();
+        try { node.fn.call(input); } catch { /* errors are the error-rate breach's business */ }
+        best = Math.min(best, performance.now() - t0);
+      }
+      if (best !== Infinity) worst = Math.max(worst, best);
+    }
+    return { confirmed: inputs.length > 0 && worst > DEFAULT_SENTINEL.p95ThresholdMs, tested: inputs.length, worstMs: worst };
+  }
+
   /** Lineage is the source of truth for what code is live: reapply every active splice, oldest first. */
   private replayLineage(): number {
     let n = 0;
@@ -298,10 +320,28 @@ export class Organism extends EventEmitter {
 
     if (this.phase === 'idle' && this.autonomous) {
       const stats = this.pipeline.order.map((id) => ({ nodeId: id, ...this.pipeline.nodes.get(id)!.windowStats() }));
-      const [breach] = this.sentinel.check(stats);
+      const stalled = this.telemetry.recentlyStalled();
+      const [breach] = this.sentinel.check(stats, stalled);
       if (breach) {
-        this.log('SENTINEL', `${this.pipeline.nodes.get(breach.nodeId)!.spec.name} breached ${breach.reason.replace('_', ' ')} threshold: ${breach.detail}.`);
+        const node = this.pipeline.nodes.get(breach.nodeId)!;
+        if (breach.reason === 'latency') {
+          const replay = this.confirmSlowness(breach.nodeId);
+          if (!replay.confirmed) {
+            this.log('SENTINEL', `${node.spec.name} looked slow (${breach.detail}) but ${replay.tested} slow input${replay.tested === 1 ? '' : 's'} replayed at ${replay.worstMs.toFixed(2)}ms worst case. Host jitter, not the code. Ignoring.`);
+            node.forgetSlow();
+            this.emitState();
+            return;
+          }
+          this.log('SENTINEL', `${node.spec.name} breached latency threshold: ${breach.detail}. Replay confirms: worst ${replay.worstMs.toFixed(1)}ms on ${replay.tested} recorded input${replay.tested === 1 ? '' : 's'}.`);
+        } else {
+          this.log('SENTINEL', `${node.spec.name} breached ${breach.reason.replace('_', ' ')} threshold: ${breach.detail}.`);
+        }
         void this.synthesize(breach.nodeId);
+      } else if (stalled && stats.some((s) => s.slowCount > 0)) {
+        this.stallNoticeAt ??= Date.now();
+        if (Date.now() - this.stallNoticeAt < 1500) this.log('SENTINEL', 'Event loop stalled recently (sleep/wake or GC); latency breaches suppressed for a minute.');
+      } else {
+        this.stallNoticeAt = null;
       }
     }
 

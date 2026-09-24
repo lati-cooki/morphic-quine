@@ -54,6 +54,12 @@ traffic ──▶ pipeline ──▶ per-node window stats
                      observe 25 executions ──▶ regression? ──▶ rollback
 ```
 
+The latency sentinel does not chase host jitter. A breach needs at least five slow samples in the
+window, not a p95 nudged over by two stray ones; it is suppressed for a minute after the event loop
+stalls (sleep/wake, long GC); and before synthesizing, the engine replays the recorded slow inputs
+three times each against the live function and proceeds only if the fastest run is still over the
+threshold. A real algorithmic cost reproduces on replay. A hiccup does not, and gets logged as such.
+
 Fitness is measured, not asserted: 55% pass rate, 30% contract (every key the incumbent emitted
 must be present and every downstream node must accept the output), 15% latency against a 5 ms p99
 budget. A candidate that scores below the threshold gets one retry with the evaluator's findings in

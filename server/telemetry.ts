@@ -13,13 +13,15 @@ export class Telemetry {
   private churn = 0;
   private started = Date.now();
   private timer: NodeJS.Timeout;
+  private lastStallAt = 0;
 
-  constructor(private windowMs = 10_000) {
+  constructor(private windowMs = 10_000, private stallLagMs = 1_000, private stallHoldMs = 60_000) {
     let expected = performance.now() + 100;
     this.timer = setInterval(() => {
       const now = performance.now();
       const lag = Math.max(0, now - expected);
       expected = now + 100;
+      if (lag > this.stallLagMs) this.lastStallAt = Date.now();
       this.lagSamples.push(lag);
       if (this.lagSamples.length > 50) this.lagSamples.shift();
 
@@ -74,6 +76,9 @@ export class Telemetry {
       uptimeSec: Math.floor((Date.now() - this.started) / 1000),
     };
   }
+
+  /** True for a minute after the event loop stalled for over a second (sleep/wake, swap, long GC). */
+  recentlyStalled(): boolean { return Date.now() - this.lastStallAt < this.stallHoldMs; }
 
   stop() { clearInterval(this.timer); }
 }

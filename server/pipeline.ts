@@ -19,6 +19,8 @@ export interface NodeWindowStats {
   p95: number;
   p99: number;
   lastLatencyMs: number;
+  /** Samples in the window over the slow threshold. */
+  slowCount: number;
 }
 
 export interface HealthThresholds {
@@ -67,7 +69,7 @@ export class RuntimeNode {
     else if (sample.latencyMs > slowMs) this.slow.push(sample);
   }
 
-  windowStats(): NodeWindowStats {
+  windowStats(slowMs: number = DEFAULT_THRESHOLDS.p95Ms): NodeWindowStats {
     const w = this.window.values();
     const lat = w.map((s) => s.latencyMs).sort((a, b) => a - b);
     const q = (p: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(p * lat.length))] : 0);
@@ -78,7 +80,13 @@ export class RuntimeNode {
       p95: q(0.95),
       p99: q(0.99),
       lastLatencyMs: this.window.last()?.latencyMs ?? 0,
+      slowCount: w.filter((s) => s.ok && s.latencyMs > slowMs).length,
     };
+  }
+
+  /** Drop recorded slow inputs and their window samples after they proved transient. */
+  forgetSlow() {
+    this.slow.clear();
   }
 
   health(t: HealthThresholds = DEFAULT_THRESHOLDS): NodeHealth {

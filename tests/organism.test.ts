@@ -269,3 +269,33 @@ describe('Organism goal splice policy', () => {
     expect(org['goalFeedback'].get('region-tag')).toMatch(/did not generalise/);
   });
 });
+
+
+describe('Organism latency sentinel', () => {
+  it('ignores slowness that does not reproduce on replay, and forgets the slow samples', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'morphic-'));
+    org = new Organism({ rootDir: dir, autonomous: true, attackRounds: 0 });
+    for (let i = 0; i < 20; i++) org.inject('NORMAL');
+    // Fake six host hiccups: normal inputs recorded as slow.
+    const jit = org.pipeline.nodes.get('jit_cache')!;
+    const input = jit.sampleInputs(1)[0];
+    for (let i = 0; i < 6; i++) jit.record({ input, ok: true, latencyMs: 40 + i, ts: 0 }, 25);
+    expect(jit.windowStats().slowCount).toBe(6);
+    await (org as any).tick();
+    const s = org.state();
+    expect(s.phase).toBe('idle');
+    expect(s.logs.some((l) => /Host jitter, not the code. Ignoring/.test(l.message))).toBe(true);
+    expect(jit.recentSlow()).toHaveLength(0);
+  });
+
+  it('confirms slowness that does reproduce and synthesizes', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'morphic-'));
+    org = new Organism({ rootDir: dir, autonomous: true, attackRounds: 0 });
+    for (let i = 0; i < 10; i++) org.inject('NORMAL');
+    org.inject('SURGE', 6);
+    await (org as any).tick();
+    const s = org.state();
+    expect(s.logs.some((l) => /Replay confirms/.test(l.message))).toBe(true);
+    expect(['synthesizing', 'candidate_ready', 'observing']).toContain(s.phase);
+  });
+});
