@@ -61,6 +61,7 @@ export function MutationFeed({ state, onSplice, onDiscard, onSynthesizeGoal }: P
               <div className="p-2.5 rounded-lg bg-slate-950/80 border border-purple-900/40 font-mono text-[11px] space-y-1">
                 <div className="flex justify-between"><span className="text-slate-500">target</span><span className="text-amber-300 font-bold">{cand.name}{outcome && <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded border ${outcome === 'spliced' ? 'border-emerald-700 text-emerald-300' : 'border-slate-600 text-slate-400'}`}>{outcome}</span>}</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">provider</span><span className="text-purple-300">{cand.provider} / {cand.model} · attempt {cand.attempt}</span></div>
+                {cand.spend && <div className="flex justify-between"><span className="text-slate-500">spend</span><span className="text-slate-300">{cand.spend.calls} call{cand.spend.calls === 1 ? '' : 's'} · {cand.spend.inputTokens} in / {cand.spend.outputTokens} out · ${cand.spend.estUsd.toFixed(4)}</span></div>}
                 <div className="flex justify-between"><span className="text-slate-500">lines</span><span className="text-slate-300"><span className="text-emerald-400">+{cand.diff.filter((d) => d.type === 'add').length}</span> <span className="text-rose-400">−{cand.diff.filter((d) => d.type === 'remove').length}</span></span></div>
                 {cand.rationale && <div className="text-slate-400 pt-1 border-t border-slate-800">{cand.rationale}</div>}
               </div>
@@ -170,7 +171,7 @@ export function MutationFeed({ state, onSplice, onDiscard, onSynthesizeGoal }: P
             state.lineage.slice().reverse().map((e) => (
               <div key={e.generation} className={`p-2.5 rounded-lg border ${e.rolledBack ? 'bg-slate-950/60 border-slate-800 opacity-60' : 'bg-emerald-950/20 border-emerald-800/50'}`}>
                 <div className="flex justify-between"><span className="font-bold text-slate-200">gen {e.generation} · {e.nodeId}</span><span className="text-slate-500">{fmtTime(e.ts)}</span></div>
-                <div className="flex justify-between text-slate-400"><span>{e.provider} / {e.model}</span><span>fitness {e.fitnessScore} · {e.speedup}×</span></div>
+                <div className="flex justify-between text-slate-400"><span>{e.provider} / {e.model}</span><span>fitness {e.fitnessScore} · {e.speedup}×{e.estUsd != null && <span className="text-slate-500"> · ${e.estUsd.toFixed(4)}</span>}</span></div>
                 <div className="text-slate-500 text-[10px]">{e.parentHash.slice(0, 10)} → {e.hash.slice(0, 10)}{e.rolledBack && <span className="text-orange-400 ml-2">rolled back</span>}</div>
               </div>
             ))}

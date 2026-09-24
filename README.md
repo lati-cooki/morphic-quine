@@ -117,6 +117,15 @@ autonomous loop repairs that node instead of rewriting the target again.
 The shipped goal is unmet on the original pipeline. The built-in reference provider declines goal
 work, so this path needs an API key.
 
+## Cost
+
+Every model call's provider-reported tokens are recorded with a list-price estimate (`server/usage.ts`
+holds the price table). The log shows tokens, seconds, and dollars per attempt; each candidate and
+each lineage generation carries what it cost to produce, red-team calls included; the bottom bar
+shows today's spend. `DAILY_BUDGET_USD` caps estimated spend per local day: once reached, the
+sentinel stops starting syntheses until midnight while still tracking faults and goals. Manual
+Synthesize is not capped.
+
 ## HUD
 
 - **Inject fault / Inject surge** send malformed or oversized packets through the live pipeline.

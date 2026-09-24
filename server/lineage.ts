@@ -15,6 +15,9 @@ export interface LineageRecordInput {
   previousSource: string;
   prompt?: string;
   rationale?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  estUsd?: number;
 }
 
 /**
@@ -91,6 +94,9 @@ function toEntry(rec: Record<string, unknown>): LineageEntry {
     fitnessScore: Number(rec.fitnessScore),
     speedup: Number(rec.speedup),
     rolledBack: Boolean(rec.rolledBack),
+    inputTokens: rec.inputTokens == null ? undefined : Number(rec.inputTokens),
+    outputTokens: rec.outputTokens == null ? undefined : Number(rec.outputTokens),
+    estUsd: rec.estUsd == null ? undefined : Number(rec.estUsd),
   };
 }
 
@@ -113,7 +119,7 @@ export function exportSnapshot(pipeline: Pipeline, lineage: Lineage, outDir: str
     .join('\n\n');
 
   const lineageTable = lineage.list().length
-    ? lineage.list().map((e) => ` *   gen ${e.generation}  ${e.ts}  ${e.nodeId}  ${e.provider}/${e.model}  fitness ${e.fitnessScore}  ${e.parentHash.slice(0, 8)} → ${e.hash.slice(0, 8)}${e.rolledBack ? '  (rolled back)' : ''}`).join('\n')
+    ? lineage.list().map((e) => ` *   gen ${e.generation}  ${e.ts}  ${e.nodeId}  ${e.provider}/${e.model}  fitness ${e.fitnessScore}${e.estUsd != null ? `  $${e.estUsd.toFixed(4)}` : ''}  ${e.parentHash.slice(0, 8)} → ${e.hash.slice(0, 8)}${e.rolledBack ? '  (rolled back)' : ''}`).join('\n')
     : ' *   (no splices yet — original source)';
 
   const code = `/**

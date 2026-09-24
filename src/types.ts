@@ -82,6 +82,8 @@ export interface CandidateView {
   model: string;
   attempt: number;
   rationale?: string;
+  /** Tokens and estimated cost spent producing this candidate (all attempts and red-team calls so far). */
+  spend?: SpendView;
   fitness: FitnessReport;
   diff: DiffLine[];
   createdAt: string;
@@ -138,6 +140,17 @@ export interface LineageEntry {
   fitnessScore: number;
   speedup: number;
   rolledBack: boolean;
+  /** Tokens and estimated cost of the attempt that produced this generation, including its red-team calls. */
+  inputTokens?: number;
+  outputTokens?: number;
+  estUsd?: number;
+}
+
+export interface SpendView {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  estUsd: number;
 }
 
 export interface OrganismState {
@@ -161,6 +174,8 @@ export interface OrganismState {
   activeGoal: string | null;
   provider: { active: string; model: string; available: string[] };
   attacker: { name: string; model: string };
+  /** Model spend since process start and since local midnight, with the daily cap if one is set. */
+  spend: { total: SpendView; today: SpendView; dailyBudgetUsd: number | null; priceKnown: boolean };
   canRollback: boolean;
 }
 

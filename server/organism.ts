@@ -6,6 +6,7 @@ import { Telemetry } from './telemetry';
 import { Sentinel, DEFAULT_SENTINEL } from './sentinel';
 import { Lineage, exportSnapshot } from './lineage';
 import { selectProvider, ProviderAttacker, PROVIDER_TIMEOUT_MS, type Provider } from './mutator';
+import { UsageMeter, priceKnown, type Usage } from './usage';
 import { FuzzAttacker, CompositeAttacker, runAttacks, previewInput, withTimeout, type Attacker, type AttackHit } from './attacker';
 import fs from 'node:fs';
 import { compileFunction, type CompiledFn } from './sandbox';
@@ -44,6 +45,8 @@ export interface OrganismOptions {
   attackBatch?: number;
   /** Hard ceiling on any single provider or attacker call. */
   providerTimeoutMs?: number;
+  /** Estimated USD the engine may spend on model calls per local day before the sentinel stops synthesizing. null = uncapped. */
+  dailyBudgetUsd?: number | null;
 }
 
 /**
@@ -77,6 +80,10 @@ export class Organism extends EventEmitter {
   private goalLastTry = new Map<string, number>();
   private goalFeedback = new Map<string, string>();
   private stallNoticeAt: number | null = null;
+  readonly meter = new UsageMeter();
+  private budgetNoticeDay: number | null = null;
+  /** Spend attributed to the synthesis in progress, so the candidate and lineage can carry it. */
+  private synthSpend = { calls: 0, inputTokens: 0, outputTokens: 0, estUsd: 0 };
   private activeGoal: string | null = null;
 
   constructor(opts: OrganismOptions) {
@@ -94,6 +101,7 @@ export class Organism extends EventEmitter {
       attackRounds: 2,
       attackBatch: 32,
       providerTimeoutMs: PROVIDER_TIMEOUT_MS,
+      dailyBudgetUsd: process.env.DAILY_BUDGET_USD ? Number(process.env.DAILY_BUDGET_USD) : null,
       pipeline: opts.pipeline ?? 'default',
       goalsDir: opts.goalsDir ?? path.join(this.def.dir, 'goals'),
       ...opts,
@@ -103,7 +111,9 @@ export class Organism extends EventEmitter {
     const sel = selectProvider();
     this.provider = opts.provider ?? sel.active;
     this.providersAvailable = opts.provider ? [opts.provider.name] : sel.available;
-    this.attacker = opts.attacker ?? (process.env.ATTACKER !== 'fuzz' && this.provider.attack ? new CompositeAttacker([new FuzzAttacker(), new ProviderAttacker(this.provider)]) : new FuzzAttacker());
+    this.attacker = opts.attacker ?? (process.env.ATTACKER !== 'fuzz' && this.provider.attack
+      ? new CompositeAttacker([new FuzzAttacker(), new ProviderAttacker(this.provider, (u, ms) => this.recordUsage(u, ms, 'attack'))])
+      : new FuzzAttacker());
     this.loadAdversarialCorpus();
     try { this.goals = loadGoals(this.opts.goalsDir); } catch (err) { this.log('GOAL', `Could not load goals: ${(err as Error).message}`); }
     this.autonomous = this.opts.autonomous;
@@ -112,6 +122,9 @@ export class Organism extends EventEmitter {
     const replayed = this.replayLineage();
     this.log('INFO', `Engine up on pipeline "${this.def.name}": ${this.pipeline.order.length} nodes compiled in isolated contexts. Lineage generation ${this.lineage.generation}${replayed ? `, ${replayed} splice${replayed === 1 ? '' : 's'} replayed from disk` : ''}.`);
     this.log('INFO', `Patch provider: ${this.provider.name} (${this.provider.model}). Available: ${this.providersAvailable.join(', ')}. Red team: ${this.attacker.name} (${this.attacker.model}), ${this.opts.attackRounds} round${this.opts.attackRounds === 1 ? '' : 's'} per candidate.`);
+    this.log('INFO', this.opts.dailyBudgetUsd != null
+      ? `Daily model budget: $${this.opts.dailyBudgetUsd.toFixed(2)} (estimated at list price${priceKnown(this.provider.model) ? '' : '; no price known for ' + this.provider.model + ', so spend will read $0'}).`
+      : `No daily model budget set (DAILY_BUDGET_USD). Spend is tracked but never capped.`);
     if (this.goals.length) {
       this.rescoreGoals();
       for (const g of this.goals) {
@@ -230,6 +243,29 @@ export class Organism extends EventEmitter {
     this.emitState();
   }
 
+  private recordUsage(u: Usage, ms: number, purpose: 'synthesize' | 'attack') {
+    const rec = this.meter.add({ ...u, provider: this.provider.name, model: this.provider.model, purpose, ms });
+    this.synthSpend.calls++;
+    this.synthSpend.inputTokens += u.inputTokens;
+    this.synthSpend.outputTokens += u.outputTokens + u.thoughtTokens;
+    this.synthSpend.estUsd += rec.estUsd;
+    return rec;
+  }
+
+  /** True when today's estimated spend has reached the cap. Logs once per day when it trips. */
+  private overBudget(): boolean {
+    const cap = this.opts.dailyBudgetUsd;
+    if (cap == null) return false;
+    const today = this.meter.today();
+    if (today.estUsd < cap) return false;
+    const day = new Date().setHours(0, 0, 0, 0);
+    if (this.budgetNoticeDay !== day) {
+      this.budgetNoticeDay = day;
+      this.log('SENTINEL', `Daily model budget reached: $${today.estUsd.toFixed(3)} of $${cap.toFixed(2)} over ${today.calls} calls. No synthesis until midnight; faults and goals are still tracked.`);
+    }
+    return true;
+  }
+
   /**
    * A latency breach is only real if the slow inputs are still slow when replayed now. Runs each
    * recorded slow input three times against the live function and keeps the fastest run, so a
@@ -318,7 +354,7 @@ export class Organism extends EventEmitter {
       }
     }
 
-    if (this.phase === 'idle' && this.autonomous) {
+    if (this.phase === 'idle' && this.autonomous && !this.overBudget()) {
       const stats = this.pipeline.order.map((id) => ({ nodeId: id, ...this.pipeline.nodes.get(id)!.windowStats() }));
       const stalled = this.telemetry.recentlyStalled();
       const [breach] = this.sentinel.check(stats, stalled);
@@ -347,7 +383,7 @@ export class Organism extends EventEmitter {
 
     if (this.phase === 'idle' && this.goals.length) {
       this.rescoreGoals();
-      if (this.autonomous) {
+      if (this.autonomous && !this.overBudget()) {
         const now = Date.now();
         const unmet = this.goals.find((g) => {
           const sc = this.goalScores.get(g.name)!;
@@ -399,6 +435,7 @@ export class Organism extends EventEmitter {
     this.targetNodeId = target;
     this.activeGoal = goal?.name ?? null;
     this.candidate = null;
+    this.synthSpend = { calls: 0, inputTokens: 0, outputTokens: 0, estUsd: 0 };
     if (goal) this.goalLastTry.set(goal.name, Date.now());
     const baseline = node.windowStats();
     const corpus = node.corpus();
@@ -431,6 +468,7 @@ export class Organism extends EventEmitter {
     let attackRoundsUsed = 0;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
       try {
+        const callStart = Date.now();
         const patch = await withTimeout(this.provider.synthesize({
           node: { id: target, name: node.spec.name, role: node.spec.role, source: node.source },
           failures: node.recentFailures().map((f) => ({ input: f.input, error: f.error ?? 'unknown' })),
@@ -439,6 +477,8 @@ export class Organism extends EventEmitter {
           feedback,
           goal: goal && goalExamples ? { name: goal.name, description: goal.description, examples: goalExamples.filter((e) => scoreOf(goal, e) < 1).slice(0, 8).concat(goalExamples.filter((e) => scoreOf(goal, e) >= 1).slice(0, 2)) } : undefined,
         }), this.opts.providerTimeoutMs, `${this.provider.name} synthesize`);
+        const callMs = Date.now() - callStart;
+        const usageRec = patch.usage ? this.recordUsage(patch.usage, callMs, 'synthesize') : null;
         const compiled = compileFunction(patch.source);
         const overrides = new Map([[target, compiled]]);
         const fitness = evaluateCandidate({
@@ -457,6 +497,7 @@ export class Organism extends EventEmitter {
           model: patch.model,
           attempt,
           rationale: patch.rationale,
+          spend: { ...this.synthSpend },
           fitness,
           diff: diffLines(node.source, patch.source),
           createdAt: new Date().toISOString(),
@@ -464,7 +505,8 @@ export class Organism extends EventEmitter {
           prompt: patch.prompt,
           baseline,
         };
-        this.log('EVAL', `Attempt ${attempt}: fitness ${fitness.score} on ${fitness.corpusSize} inputs. pass ${pct(fitness.passRate)}, contract ${pct(fitness.contractRate)}, p99 ${fitness.candidate.p99}ms vs ${fitness.incumbent.p99}ms (${fitness.speedup}x)${fitness.goal ? `, goal train ${fitness.goal.train} / holdout ${fitness.goal.holdout}` : ''}.`);
+        this.log('EVAL', `Attempt ${attempt}: fitness ${fitness.score} on ${fitness.corpusSize} inputs. pass ${pct(fitness.passRate)}, contract ${pct(fitness.contractRate)}, p99 ${fitness.candidate.p99}ms vs ${fitness.incumbent.p99}ms (${fitness.speedup}x)${fitness.goal ? `, goal train ${fitness.goal.train} / holdout ${fitness.goal.holdout}` : ''}.`,
+          usageRec ? `${(callMs / 1000).toFixed(1)}s, ${usageRec.inputTokens} in / ${usageRec.outputTokens + usageRec.thoughtTokens} out tokens${usageRec.thoughtTokens ? ` (${usageRec.thoughtTokens} thinking)` : ''}, est $${usageRec.estUsd.toFixed(4)}` : `${(callMs / 1000).toFixed(1)}s, provider reported no usage`);
         if (fitness.goal && fitness.goal.train - fitness.goal.holdout > 0.25) this.log('EVAL', `Attempt ${attempt}: train/holdout gap ${(fitness.goal.train - fitness.goal.holdout).toFixed(2)}. The candidate fits the shown examples better than the hidden ones; likely hardcoded.`);
         if (!best || fitness.score > best.fitness.score) best = cand;
         if (fitness.score < this.spliceThreshold) { feedback = describeShortfall(cand); continue; }
@@ -484,6 +526,7 @@ export class Organism extends EventEmitter {
             attacker: this.attacker.name, rounds: attackRoundsUsed, tried, hits: hits.length, survived: hits.length === 0,
             sample: hits.slice(0, 5).map((h) => ({ input: previewInput(h.input), error: h.error })),
           };
+          cand.spend = { ...this.synthSpend };
           if (hits.length) {
             // Re-score with the hits in the corpus so the number on the card is honest, then send it back.
             for (const h of hits) corpus.push(h.input);
@@ -537,9 +580,12 @@ export class Organism extends EventEmitter {
       previousSource,
       prompt: cand.prompt,
       rationale: cand.rationale,
+      inputTokens: cand.spend?.inputTokens,
+      outputTokens: cand.spend?.outputTokens,
+      estUsd: cand.spend?.estUsd,
     });
     this.sentinel.beginObservation(cand.targetNodeId, { errorRate: cand.baseline.errorRate, p95: cand.baseline.p95 });
-    this.log('SPLICE', `${node.spec.name} → v${version} swapped in place by ${by}. Generation ${this.lineage.generation}, hash ${hash.slice(0, 8)}. Observing.`);
+    this.log('SPLICE', `${node.spec.name} → v${version} swapped in place by ${by}. Generation ${this.lineage.generation}, hash ${hash.slice(0, 8)}. Observing.`, cand.spend ? `generation cost: ${cand.spend.calls} call${cand.spend.calls === 1 ? '' : 's'}, ${cand.spend.inputTokens} in / ${cand.spend.outputTokens} out tokens, est $${cand.spend.estUsd.toFixed(4)}` : undefined);
     this.lastCandidate = { ...cand, outcome: 'spliced' };
     this.candidate = null;
     this.phase = 'observing';
@@ -640,6 +686,7 @@ export class Organism extends EventEmitter {
       activeGoal: this.activeGoal,
       provider: { active: this.provider.name, model: this.provider.model, available: this.providersAvailable },
       attacker: { name: this.attacker.name, model: this.attacker.model },
+      spend: { total: this.meter.totals(), today: this.meter.today(), dailyBudgetUsd: this.opts.dailyBudgetUsd, priceKnown: priceKnown(this.provider.model) },
       canRollback: Boolean(this.lineage.latestActive()),
     };
   }

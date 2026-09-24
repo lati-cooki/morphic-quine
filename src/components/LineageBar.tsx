@@ -18,9 +18,13 @@ export function LineageBar({ state, onExport }: { state: OrganismState; onExport
           <span className="text-[10px] text-slate-500">state hash {state.stateHash.slice(0, 16)}</span>
         </div>
       </div>
-      <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-slate-900/60 border border-slate-700/60 text-xs">
+      <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-slate-900/60 border border-slate-700/60 text-xs" title={state.spend.priceKnown ? 'Estimated at list price from provider-reported tokens' : `No price table entry for ${state.provider.model}; tokens are counted but cost reads $0`}>
         <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0" />
-        <span className="text-slate-300">every node runs in its own V8 context with a {250} ms per-call limit</span>
+        <span className="text-slate-300">
+          model spend today <span className="text-white font-semibold">${state.spend.today.estUsd.toFixed(3)}</span>
+          <span className="text-slate-500"> · {state.spend.today.calls} calls · {(state.spend.today.inputTokens / 1000).toFixed(1)}k in / {(state.spend.today.outputTokens / 1000).toFixed(1)}k out</span>
+          {state.spend.dailyBudgetUsd != null && <span className={state.spend.today.estUsd >= state.spend.dailyBudgetUsd ? 'text-rose-300' : 'text-slate-400'}> · cap ${state.spend.dailyBudgetUsd.toFixed(2)}</span>}
+        </span>
       </div>
       <button onClick={onExport} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer" title="Write the live pipeline as a runnable .mjs with the lineage table in its header">
         <Save className="w-3.5 h-3.5" /> export snapshot

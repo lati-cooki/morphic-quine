@@ -6,6 +6,7 @@ import vm from 'node:vm';
 export const PROVIDER_TIMEOUT_MS = Math.max(30_000, Number(process.env.PROVIDER_TIMEOUT_MS) || 120_000);
 import { extractFunctionSource } from './sandbox';
 import type { AttackRequest, Attacker } from './attacker';
+import type { Usage } from './usage';
 
 export interface PatchRequest {
   node: { id: string; name: string; role: string; source: string };
@@ -28,6 +29,12 @@ export interface PatchResult {
   model: string;
   rationale?: string;
   prompt: string;
+  usage?: Usage;
+}
+
+export interface AttackResult {
+  inputs: unknown[];
+  usage?: Usage;
 }
 
 export interface Provider {
@@ -36,7 +43,7 @@ export interface Provider {
   available(): boolean;
   synthesize(req: PatchRequest): Promise<PatchResult>;
   /** Optional red team: propose inputs meant to break the function. */
-  attack?(req: AttackRequest): Promise<unknown[]>;
+  attack?(req: AttackRequest): Promise<AttackResult>;
 }
 
 const ATTACK_SYSTEM = `You are a red team for a single JavaScript function running inside a data pipeline.
@@ -147,10 +154,10 @@ export class AnthropicProvider implements Provider {
     const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     const source = extractFunctionSource(text);
     if (!source) throw new Error(noFunction(text));
-    return { source, provider: this.name, model: this.model, prompt };
+    return { source, provider: this.name, model: this.model, prompt, usage: anthropicUsage(response.usage) };
   }
 
-  async attack(req: AttackRequest): Promise<unknown[]> {
+  async attack(req: AttackRequest): Promise<AttackResult> {
     if (!this.client) this.client = new Anthropic({ timeout: PROVIDER_TIMEOUT_MS - 5_000 });
     const response = await this.client.messages.create({
       model: this.model,
@@ -159,7 +166,7 @@ export class AnthropicProvider implements Provider {
       messages: [{ role: 'user', content: buildAttackPrompt(req) }],
     });
     if (response.stop_reason === 'refusal') throw new Error('Model declined the attack request');
-    return parseAttackList(response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), req.max);
+    return { inputs: parseAttackList(response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), req.max), usage: anthropicUsage(response.usage) };
   }
 }
 
@@ -182,22 +189,37 @@ export class GeminiProvider implements Provider {
     });
     const source = extractFunctionSource(response.text ?? '');
     if (!source) throw new Error(noFunction(response.text ?? ''));
-    return { source, provider: this.name, model: this.model, prompt };
+    return { source, provider: this.name, model: this.model, prompt, usage: geminiUsage(response.usageMetadata) };
   }
 
-  async attack(req: AttackRequest): Promise<unknown[]> {
+  async attack(req: AttackRequest): Promise<AttackResult> {
     if (!this.client) this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!, httpOptions: { timeout: 60_000 } });
     const response = await this.client.models.generateContent({ model: this.model, contents: `${ATTACK_SYSTEM}\n\n${buildAttackPrompt(req)}` });
-    return parseAttackList(response.text ?? '', req.max);
+    return { inputs: parseAttackList(response.text ?? '', req.max), usage: geminiUsage(response.usageMetadata) };
   }
 }
 
-/** Adapter so an LLM provider can serve as the attacker. */
+/** Adapter so an LLM provider can serve as the attacker. Usage is reported through onUsage. */
 export class ProviderAttacker implements Attacker {
-  constructor(private provider: Provider) {}
+  constructor(private provider: Provider, private onUsage?: (u: Usage, ms: number) => void) {}
   get name() { return this.provider.name; }
   get model() { return this.provider.model; }
-  generate(req: AttackRequest) { return this.provider.attack!(req); }
+  async generate(req: AttackRequest) {
+    const t0 = Date.now();
+    const r = await this.provider.attack!(req);
+    if (r.usage && this.onUsage) this.onUsage(r.usage, Date.now() - t0);
+    return r.inputs;
+  }
+}
+
+function anthropicUsage(u: { input_tokens: number; output_tokens: number } | undefined): Usage | undefined {
+  if (!u) return undefined;
+  return { inputTokens: u.input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, thoughtTokens: 0 };
+}
+
+function geminiUsage(u: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } | undefined): Usage | undefined {
+  if (!u) return undefined;
+  return { inputTokens: u.promptTokenCount ?? 0, outputTokens: u.candidatesTokenCount ?? 0, thoughtTokens: u.thoughtsTokenCount ?? 0 };
 }
 
 /**
